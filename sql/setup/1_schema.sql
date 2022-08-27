@@ -171,7 +171,8 @@ CREATE TABLE `gacha_item_masters` (
   `weight` int NOT NULL comment '確率。万分率で表示',
   `created_at` bigint NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE uniq_item_id (`gacha_id`, `item_type`, `item_id`)
+  UNIQUE uniq_item_id (`gacha_id`, `item_type`, `item_id`),
+  INDEX gacha_id_id_idx (`gacha_id`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE `user_items` (
