@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/profiler"
@@ -322,9 +323,10 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 			return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 		}
 
+		sessionUserID, _ := splitSessionID(sessID)
 		userSession := new(Session)
 		query := "SELECT * FROM user_sessions WHERE session_id=? AND deleted_at IS NULL"
-		_db := h.chooseUserDB(userID)
+		_db := h.chooseUserDB(sessionUserID)
 		if err := _db.GetContext(ctx, userSession, query, sessID); err != nil {
 			if err == sql.ErrNoRows {
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
@@ -1085,7 +1087,7 @@ func (h *Handler) createUser(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	sessID, err := generateUUID()
+	sessID, err := generateUUID(user.ID)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1186,7 +1188,7 @@ func (h *Handler) login(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	sessID, err := generateUUID()
+	sessID, err := generateUUID(user.ID)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1289,7 +1291,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	tk, err := generateUUID()
+	tk, err := generateUUID(userID)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1664,7 +1666,7 @@ func (h *Handler) listItem(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	tk, err := generateUUID()
+	tk, err := generateUUID(userID)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -2193,13 +2195,25 @@ func (h *Handler) generateID(ctx context.Context) (int64, error) {
 }
 
 // generateSessionID
-func generateUUID() (string, error) {
+func generateUUID(userID int64) (string, error) {
 	id, err := uuid.NewRandom()
 	if err != nil {
 		return "", err
 	}
 
-	return id.String(), nil
+	return fmt.Sprintf("%d,%s", userID, id.String()), nil
+}
+
+func splitSessionID(sessionID string) (int64, string) {
+	splitted := strings.Split(sessionID, ",")
+	if len(splitted) != 2 {
+		return 0, "session_not_found"
+	}
+	userID, err := strconv.ParseInt(splitted[0], 10, 64)
+	if err != nil {
+		return -1, "parse_failed"
+	}
+	return userID, splitted[1]
 }
 
 // getUserID gets userID by path param.

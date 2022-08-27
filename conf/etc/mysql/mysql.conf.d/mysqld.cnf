@@ -15,7 +15,7 @@
 #### ISUCON ####
 disable-log-bin
 max_connections = 2048
-innodb_buffer_pool_size = 3200M
+innodb_buffer_pool_size = 3400M
 innodb_flush_log_at_trx_commit = 0
 innodb_file_per_table=ON
 innodb_flush_method=O_DIRECT
@@ -26,10 +26,10 @@ performance_schema = off
 
 ### SLOW LOGS
 
-slow_query_log = 1
-slow_query_log_file = /var/log/mysql/mysql-slow.log
-long_query_time = 0.05 # all slow query time
-log-queries-not-using-indexes
+slow_query_log = 0
+# slow_query_log_file = /var/log/mysql/mysql-slow.log
+# long_query_time = 0.05 # all slow query time
+# log-queries-not-using-indexes
 
 #### ISUCON ####
 
@@ -80,7 +80,7 @@ myisam-recover-options  = BACKUP
 #
 # Error log - should be very few entries.
 #
-log_error = /var/log/mysql/error.log
+#log_error = /var/log/mysql/error.log
 #
 # Here you can see queries with especially long duration
 # slow_query_log		= 1
