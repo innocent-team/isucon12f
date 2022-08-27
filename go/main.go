@@ -411,17 +411,38 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		return nil, err
 	}
 
+	// ユーザーの受け取り履歴 (login_bonus_masters.id -> 受け取り情報) を構築
+	var loginBonusIDs []int64
+	for _, bonus := range loginBonuses {
+		loginBonusIDs = append(loginBonusIDs, bonus.ID)
+	}
+	query, args, err := sqlx.In(
+		"SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id IN (?)",
+		userID,
+		loginBonusIDs,
+	)
+	// TODO: len(loginBonusIDs) == 0 のときのハンドリング
+	if err != nil {
+		return nil, err
+	}
+	var userLoginBonuses []*UserLoginBonus
+	err = tx.SelectContext(ctx, &userLoginBonuses, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	bonusIDtoUserLoginBonus := make(map[int64]*UserLoginBonus)
+	for _, userLoginBonus := range userLoginBonuses {
+		userLoginBonuses[userLoginBonus.LoginBonusID] = userLoginBonus
+	}
+
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
 	for _, bonus := range loginBonuses {
 		initBonus := false
 		// ボーナスの進捗取得
-		userBonus := new(UserLoginBonus)
-		query = "SELECT * FROM user_login_bonuses WHERE user_id=? AND login_bonus_id=?"
-		if err := tx.GetContext(ctx, userBonus, query, userID, bonus.ID); err != nil {
-			if err != sql.ErrNoRows {
-				return nil, err
-			}
+		userBonus, hasBonusRow := bonusIDtoUserLoginBonus[bonus.ID]
+		if !hasBonusRow {
+			// 初めてログインボーナスを受け取る
 			initBonus = true
 
 			ubID, err := h.generateID(ctx)
