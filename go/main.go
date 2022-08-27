@@ -769,10 +769,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	itemIDtoMaster := make(map[int64]*ItemMaster)
 	for _, item := range itemMasters {
 		// item_typeがおかしかったらエラーにする
-		if item.ItemType != 3 {
-			return nil, ErrItemNotFound
-		}
-		if item.ItemType != 4 {
+		if !(item.ItemType == 3 || item.ItemType == 4) {
 			return nil, ErrItemNotFound
 		}
 		itemIDtoMaster[item.ID] = item
