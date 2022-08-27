@@ -438,7 +438,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
-	var obtainer *ItemObtainer
+	obtainer := &ItemObtainer{}
 	for _, bonus := range loginBonuses {
 		initBonus := false
 		// ボーナスの進捗取得
