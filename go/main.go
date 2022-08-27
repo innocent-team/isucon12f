@@ -18,7 +18,6 @@ import (
 
 	"cloud.google.com/go/profiler"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/goccy/go-json"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
@@ -60,23 +59,6 @@ type Handler struct {
 	AppID   int64
 	DB      *sqlx.DB
 	UserDBs []*sqlx.DB
-}
-
-type JSONSerializer struct{}
-
-func (j *JSONSerializer) Serialize(c echo.Context, i interface{}, indent string) error {
-	enc := json.NewEncoder(c.Response())
-	return enc.Encode(i)
-}
-
-func (j *JSONSerializer) Deserialize(c echo.Context, i interface{}) error {
-	err := json.NewDecoder(c.Request().Body).Decode(i)
-	if ute, ok := err.(*json.UnmarshalTypeError); ok {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Unmarshal type error: expected=%v, got=%v, field=%v, offset=%v", ute.Type, ute.Value, ute.Field, ute.Offset)).SetInternal(err)
-	} else if se, ok := err.(*json.SyntaxError); ok {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Syntax error: offset=%v, error=%v", se.Offset, se.Error())).SetInternal(err)
-	}
-	return err
 }
 
 func main() {
@@ -123,7 +105,6 @@ func main() {
 	time.Local = time.FixedZone("Local", 9*60*60)
 
 	e := echo.New()
-	e.JSONSerializer = &JSONSerializer{}
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
@@ -2257,7 +2238,7 @@ var lastID int64 = 0
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
-		lastID = time.Now().Unix()*1000 + h.AppID
+		lastID = time.Now().Unix() * 1000 + h.AppID
 	}
 	lastID += 7
 	return lastID, nil
