@@ -2240,7 +2240,7 @@ func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
 		lastID = time.Now().Unix() * 1000 + h.AppID
 	}
-	lastID += 6
+	lastID += 7
 	return lastID, nil
 }
 
