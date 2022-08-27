@@ -549,7 +549,7 @@ func (h *Handler) adminUser(c echo.Context) error {
 
 	query := "SELECT * FROM users WHERE id=?"
 	user := new(User)
-	db := h.chooseUserDB(user.ID)
+	db := h.chooseUserDB(userID)
 	if err = db.GetContext(ctx, user, query, userID); err != nil {
 		if err == sql.ErrNoRows {
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
@@ -639,7 +639,7 @@ func (h *Handler) adminBanUser(c echo.Context) error {
 
 	query := "SELECT * FROM users WHERE id=?"
 	user := new(User)
-	db := h.chooseUserDB(user.ID)
+	db := h.chooseUserDB(userID)
 	if err = db.GetContext(ctx, user, query, userID); err != nil {
 		if err == sql.ErrNoRows {
 			return errorResponse(c, http.StatusBadRequest, ErrUserNotFound)
