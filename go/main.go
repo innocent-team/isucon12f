@@ -172,7 +172,11 @@ func main() {
 	adminAuthAPI.POST("/admin/user/:userID/ban", h.adminBanUser)
 
 	// ガチャのマスターデータのキャッシュを更新
-	localGachaMasters.Refresh(e.NewContext(nil, nil), h)
+	dummyReq, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		e.Logger.Fatalf("failed to initialize master cache: %v", err)
+	}
+	localGachaMasters.Refresh(e.NewContext(dummyReq, nil), h)
 
 	e.Logger.Infof("Start server: address=%s", e.Server.Addr)
 	e.Logger.Error(e.StartServer(e.Server))
