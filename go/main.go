@@ -55,6 +55,7 @@ const (
 )
 
 type Handler struct {
+	AppID   int64
 	DB      *sqlx.DB
 	UserDBs []*sqlx.DB
 }
@@ -123,9 +124,15 @@ func main() {
 		e.Logger.Fatalf("failed to connect to user db: %v", err)
 	}
 
+	appID, err := strconv.ParseInt(os.Getenv("ISUCON_APP_NUMBER"), 10, 64)
+	if err != nil {
+		e.Logger.Fatalf("Need env WEBID=1,2...")
+	}
+
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
+		AppID:   appID,
 		DB:      dbx,
 		UserDBs: userDBs,
 	}
@@ -2229,7 +2236,7 @@ var lastID int64 = 0
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
-		lastID = time.Now().Unix() * 10000000
+		lastID = time.Now().Unix() * 10000000 * (h.AppID + 1)
 	}
 	lastID += 1
 	return lastID, nil
