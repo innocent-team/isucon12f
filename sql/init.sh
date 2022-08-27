@@ -9,7 +9,7 @@ ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
 ISUCON_DB_NAME=${ISUCON_DB_NAME:-isucon}
 SSH_FLAGS="-i /home/isucon/.ssh/id_rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-function init_db () {
+init_db () {
 	host=$1
 
 	mysql -u"$ISUCON_DB_USER" \
