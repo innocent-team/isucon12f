@@ -46,6 +46,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 	l.GachaItemList = gachaItemList
+	l.GachaItemListByGachaID = map[int64][]*GachaItemMaster{}
 	for _, gachaItem := range gachaItemList {
 		l.GachaItemListByGachaID[gachaItem.GachaID] = append(l.GachaItemListByGachaID[gachaItem.GachaID], gachaItem)
 	}
