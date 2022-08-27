@@ -739,18 +739,6 @@ func (obtainer *ItemObtainer) commitCards(ctx context.Context, h *Handler, tx *s
 	return obtainCards, nil
 }
 
-// 渡されたUserItemのスライスをorderに沿って並べ替える
-func (obtainer *ItemObtainer) sortUserItemsByObtainOrder(obtainItems []*UserItem) {
-	itemIDtoOrder := make(map[int64]int)
-	for _, item := range obtainer.obtainItems {
-		itemIDtoOrder[item.itemID] = item.order
-	}
-
-	sort.Slice(obtainItems, func(i, j int) bool {
-		return itemIDtoOrder[obtainItems[i].ItemID] < itemIDtoOrder[obtainItems[j].ItemID]
-	})
-}
-
 func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64) ([]*UserItem, error) {
 	if len(obtainer.obtainItems) == 0 {
 		return []*UserItem{}, nil
@@ -844,8 +832,6 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 		}
 		obtainItems = append(obtainItems, uitem)
 	}
-
-	obtainer.sortUserItemsByObtainOrder(obtainItems)
 
 	return obtainItems, nil
 }
