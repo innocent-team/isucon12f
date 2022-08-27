@@ -224,7 +224,8 @@ CREATE TABLE `version_masters` (
   `id` bigint NOT NULL,
   `status` int(2) NOT NULL comment 'ステータス 1: available、2:not_available',
   `master_version` varchar(128) NOT NULL comment 'マスタバージョン',
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  INDEX status_idx (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
 CREATE TABLE `user_sessions` (
