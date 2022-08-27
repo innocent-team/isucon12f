@@ -144,6 +144,7 @@ func main() {
 	// utility
 	e.POST("/initialize", initialize)
 	e.GET("/health", h.health)
+	e.POST("/gacha/refresh", h.refreshGacha)
 
 	// feature
 	API := e.Group("", h.apiMiddleware)
@@ -159,7 +160,6 @@ func main() {
 	sessCheckAPI.POST("/user/:userID/card", h.updateDeck)
 	sessCheckAPI.POST("/user/:userID/reward", h.reward)
 	sessCheckAPI.GET("/user/:userID/home", h.home)
-	sessCheckAPI.GET("/gacha/refresh", h.refreshGacha)
 
 	// admin
 	adminAPI := e.Group("", h.adminMiddleware)
@@ -170,6 +170,9 @@ func main() {
 	adminAuthAPI.PUT("/admin/master", h.adminUpdateMaster)
 	adminAuthAPI.GET("/admin/user/:userID", h.adminUser)
 	adminAuthAPI.POST("/admin/user/:userID/ban", h.adminBanUser)
+
+	// ガチャのマスターデータのキャッシュを更新
+	localGachaMasters.Refresh(e.NewContext(nil, nil), h)
 
 	e.Logger.Infof("Start server: address=%s", e.Server.Addr)
 	e.Logger.Error(e.StartServer(e.Server))
@@ -931,6 +934,10 @@ func initialize(c echo.Context) error {
 		c.Logger().Errorf("Failed to initialize %s: %v", string(out), err)
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+
+	localGachaMasters.Refresh(c, &Handler{
+		DB: dbx,
+	})
 
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
