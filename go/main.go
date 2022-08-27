@@ -159,6 +159,7 @@ func main() {
 	sessCheckAPI.POST("/user/:userID/card", h.updateDeck)
 	sessCheckAPI.POST("/user/:userID/reward", h.reward)
 	sessCheckAPI.GET("/user/:userID/home", h.home)
+	sessCheckAPI.GET("/gacha/refresh", h.refreshGacha)
 
 	// admin
 	adminAPI := e.Group("", h.adminMiddleware)
@@ -1262,42 +1263,14 @@ func (h *Handler) listGacha(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	gachaMasterList := []*GachaMaster{}
-	query := "SELECT * FROM gacha_masters WHERE start_at <= ? AND end_at >= ? ORDER BY display_order ASC"
-	_db := h.chooseUserDB(userID)
-	err = _db.SelectContext(ctx, &gachaMasterList, query, requestAt, requestAt)
+	gachaDataList, err := localGachaMasters.List(c, h, requestAt)
 	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	if len(gachaMasterList) == 0 {
-		return successResponse(c, &ListGachaResponse{
-			Gachas: []*GachaData{},
-		})
-	}
-
-	// ガチャ排出アイテム取得
-	gachaDataList := make([]*GachaData, 0)
-	query = "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC"
-	for _, v := range gachaMasterList {
-		var gachaItem []*GachaItemMaster
-		err = _db.SelectContext(ctx, &gachaItem, query, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-
-		if len(gachaItem) == 0 {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
-		}
-
-		gachaDataList = append(gachaDataList, &GachaData{
-			Gacha:     v,
-			GachaItem: gachaItem,
-		})
+		return err
 	}
 
 	// genearte one time token
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
+	query := "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
+	_db := h.chooseUserDB(userID)
 	if _, err = _db.ExecContext(ctx, query, requestAt, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1402,49 +1375,8 @@ func (h *Handler) drawGacha(c echo.Context) error {
 		return errorResponse(c, http.StatusConflict, fmt.Errorf("not enough isucon"))
 	}
 
-	// gachaIDからガチャマスタの取得
-	query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
-	gachaInfo := new(GachaMaster)
-	if err = _db.GetContext(ctx, gachaInfo, query, gachaID, requestAt, requestAt); err != nil {
-		if sql.ErrNoRows == err {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	// gachaItemMasterからアイテムリスト取得
-	gachaItemList := make([]*GachaItemMaster, 0)
-	err = _db.SelectContext(ctx, &gachaItemList, "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC", gachaID)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	if len(gachaItemList) == 0 {
-		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
-	}
-
-	// weightの合計値を算出
-	var sum int64
-	err = _db.GetContext(ctx, &sum, "SELECT SUM(weight) FROM gacha_item_masters WHERE gacha_id=?", gachaID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, err)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
 	// random値の導出 & 抽選
-	result := make([]*GachaItemMaster, 0, gachaCount)
-	for i := 0; i < int(gachaCount); i++ {
-		random := rand.Int63n(sum)
-		boundary := 0
-		for _, v := range gachaItemList {
-			boundary += v.Weight
-			if random < int64(boundary) {
-				result = append(result, v)
-				break
-			}
-		}
-	}
+	gachaName, result, err := localGachaMasters.Pick(c, h, gachaID, gachaCount, requestAt)
 
 	tx, err := _db.Beginx()
 	if err != nil {
@@ -1466,7 +1398,7 @@ func (h *Handler) drawGacha(c echo.Context) error {
 			ItemType:       v.ItemType,
 			ItemID:         v.ItemID,
 			Amount:         v.Amount,
-			PresentMessage: fmt.Sprintf("%sの付与アイテムです", gachaInfo.Name),
+			PresentMessage: fmt.Sprintf("%sの付与アイテムです", gachaName),
 			CreatedAt:      requestAt,
 			UpdatedAt:      requestAt,
 		}
