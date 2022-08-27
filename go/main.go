@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"time"
 
@@ -616,6 +617,252 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 	return firstReceivedPresents, nil
 }
 
+type ItemObtainerObtainItem struct {
+	itemID   int64
+	itemType int
+	amount   int64
+	// commitItems で []*UserItem を返す前にorderで並べ替えること！
+	order int
+}
+
+type ItemObtainer struct {
+	// coins (獲得した個数のスライス)
+	obtainCoins []int64
+	// cards (item_masters.id のスライス)
+	obtainCards []int64
+	// items
+	obtainItems []*ItemObtainerObtainItem
+}
+
+func (obtainer *ItemObtainer) ObtainItem(itemID int64, itemType int, obtainAmount int64) error {
+	itemOrder := 0
+	switch itemType {
+	case 1: // coin
+		obtainer.obtainCoins = append(obtainer.obtainCoins, obtainAmount)
+	case 2: // card(ハンマー)
+		obtainer.obtainCards = append(obtainer.obtainCards, itemID)
+	case 3, 4: // 強化素材
+		obtainer.obtainItems = append(obtainer.obtainItems, &ItemObtainerObtainItem{
+			itemID:   itemID,
+			itemType: itemType,
+			amount:   obtainAmount,
+			order:    itemOrder,
+		})
+		itemOrder++
+	default:
+		return ErrInvalidItemType
+	}
+	return nil
+}
+
+func (obtainer *ItemObtainer) commitCoins(ctx context.Context, tx *sqlx.Tx, userID int64) ([]int64, error) {
+	if len(obtainer.obtainCoins) == 0 {
+		return obtainer.obtainCoins, nil
+	}
+
+	user := new(User)
+	query := "SELECT * FROM users WHERE id=?"
+	if err := tx.GetContext(ctx, user, query, userID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	var obtainAmount int64
+	for _, amount := range obtainer.obtainCoins {
+		obtainAmount += amount
+	}
+
+	query = "UPDATE users SET isu_coin=? WHERE id=?"
+	totalCoin := user.IsuCoin + obtainAmount
+	if _, err := tx.ExecContext(ctx, query, totalCoin, user.ID); err != nil {
+		return nil, err
+	}
+
+	return obtainer.obtainCoins, nil
+}
+
+func (obtainer *ItemObtainer) commitCards(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64) ([]*UserCard, error) {
+	if len(obtainer.obtainCards) == 0 {
+		return []*UserCard{}, nil
+	}
+
+	query, args, err := sqlx.In("SELECT * FROM item_masters WHERE id IN (?)", obtainer.obtainCards)
+	if err != nil {
+		return nil, err
+	}
+
+	var itemMasters []*ItemMaster
+	err = tx.SelectContext(ctx, &itemMasters, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var obtainCards []*UserCard
+
+	for _, item := range itemMasters {
+		// item_typeがおかしかったらエラーにする
+		if item.ItemType != 2 {
+			return nil, ErrItemNotFound
+		}
+
+		cID, err := h.generateID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		card := &UserCard{
+			ID:           cID,
+			UserID:       userID,
+			CardID:       item.ID,
+			AmountPerSec: *item.AmountPerSec,
+			Level:        1,
+			TotalExp:     0,
+			CreatedAt:    requestAt,
+			UpdatedAt:    requestAt,
+		}
+
+		obtainCards = append(obtainCards, card)
+	}
+
+	query = "INSERT INTO user_cards" +
+		"(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES " +
+		"(:id, :user_id, :card_id, :amount_per_sec, :level, :total_exp, :created_at, :updated_at)"
+	if _, err := tx.NamedExecContext(ctx, query, obtainCards); err != nil {
+		return nil, err
+	}
+
+	return obtainCards, nil
+}
+
+// 渡されたUserItemのスライスをorderに沿って並べ替える
+func (obtainer *ItemObtainer) sortUserItemsByObtainOrder(obtainItems []*UserItem) {
+	itemIDtoOrder := make(map[int64]int)
+	for _, item := range obtainer.obtainItems {
+		itemIDtoOrder[item.itemID] = item.order
+	}
+
+	sort.Slice(obtainItems, func(i, j int) bool {
+		return itemIDtoOrder[obtainItems[i].ItemID] < itemIDtoOrder[obtainItems[j].ItemID]
+	})
+}
+
+func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64) ([]*UserItem, error) {
+	if len(obtainer.obtainItems) == 0 {
+		return []*UserItem{}, nil
+	}
+
+	var itemIDs []int64
+	for _, item := range obtainer.obtainItems {
+		itemIDs = append(itemIDs, item.itemID)
+	}
+	query, args, err := sqlx.In("SELECT * FROM item_masters WHERE id IN (?)", itemIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	var itemMasters []*ItemMaster
+	err = tx.SelectContext(ctx, &itemMasters, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	itemIDtoMaster := make(map[int64]*ItemMaster)
+	for _, item := range itemMasters {
+		// item_typeがおかしかったらエラーにする
+		if item.ItemType != 3 {
+			return nil, ErrItemNotFound
+		}
+		if item.ItemType != 4 {
+			return nil, ErrItemNotFound
+		}
+		itemIDtoMaster[item.ID] = item
+	}
+
+	// 初めて取得したアイテムはINSERT、持っているアイテムは所持数をUPDATEする
+	// TODO: primary keyを解きほぐしたらUPSERTにできるかも？
+
+	// 持っているアイテムのリストと item_id -> user_item のマッピングを作っておく
+	var havingItems []*UserItem
+	query, args, err = sqlx.In("SELECT * FROM user_items WHERE user_id = ? AND item_id IN (?)", userID, itemIDs)
+	if err != nil {
+		return nil, err
+	}
+	err = tx.SelectContext(ctx, &havingItems, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	itemIDtoUserItem := make(map[int64]*UserItem)
+	for _, havingItem := range havingItems {
+		itemIDtoUserItem[havingItem.ItemID] = havingItem
+	}
+
+	// 初めて取得したアイテムをかき集める
+	var firstObtainedItems []*UserItem
+	for _, item := range obtainer.obtainItems {
+		if havingItem, ok := itemIDtoUserItem[item.itemID]; ok {
+			havingItem.Amount += int(item.amount)
+			havingItem.UpdatedAt = requestAt
+		} else {
+			uitemID, err := h.generateID(ctx)
+			if err != nil {
+				return nil, err
+			}
+			firstObtainedItems = append(firstObtainedItems, &UserItem{
+				ID:        uitemID,
+				UserID:    userID,
+				ItemType:  item.itemType,
+				ItemID:    item.itemID,
+				Amount:    int(item.amount),
+				CreatedAt: requestAt,
+				UpdatedAt: requestAt,
+			})
+		}
+	}
+
+	var obtainItems []*UserItem
+
+	// 初めて取得したアイテムについてINSERT
+	if _, err := tx.NamedExecContext(
+		ctx,
+		"INSERT INTO user_items"+
+			"(id, user_id, item_id, item_type, amount, created_at, updated_at) VALUES "+
+			"(:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)",
+		firstObtainedItems); err != nil {
+		return nil, err
+	}
+	obtainItems = append(obtainItems, firstObtainedItems...)
+
+	// 持っているアイテムについてUPDATE
+	for _, uitem := range havingItems {
+		query = "UPDATE user_items SET amount=?, updated_at=? WHERE id=?"
+		if _, err := tx.ExecContext(ctx, query, uitem.Amount, uitem.UpdatedAt, uitem.ID); err != nil {
+			return nil, err
+		}
+		obtainItems = append(obtainItems, uitem)
+	}
+
+	obtainer.sortUserItemsByObtainOrder(obtainItems)
+
+	return obtainItems, nil
+}
+
+func (obtainer *ItemObtainer) Commit(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64) ([]int64, []*UserCard, []*UserItem, error) {
+	obtainCoins, err := obtainer.commitCoins(ctx, tx, userID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	obtainCards, err := obtainer.commitCards(ctx, h, tx, userID, requestAt)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	obtainItems, err := obtainer.commitItems(ctx, h, tx, userID, requestAt)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return obtainCoins, obtainCards, obtainItems, nil
+}
+
 // obtainItem アイテム付与処理
 func (h *Handler) obtainItem(ctx context.Context, tx *sqlx.Tx, userID, itemID int64, itemType int, obtainAmount int64, requestAt int64) ([]int64, []*UserCard, []*UserItem, error) {
 	obtainCoins := make([]int64, 0)
@@ -642,6 +889,7 @@ func (h *Handler) obtainItem(ctx context.Context, tx *sqlx.Tx, userID, itemID in
 
 	case 2: // card(ハンマー)
 		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
+		// TODO: item_typeはidでSELECTしたあとにチェック
 		item := new(ItemMaster)
 		if err := tx.GetContext(ctx, item, query, itemID, itemType); err != nil {
 			if err == sql.ErrNoRows {
@@ -672,6 +920,7 @@ func (h *Handler) obtainItem(ctx context.Context, tx *sqlx.Tx, userID, itemID in
 
 	case 3, 4: // 強化素材
 		query := "SELECT * FROM item_masters WHERE id=? AND item_type=?"
+		// TODO: item_typeはidでSELECTしたあとにチェック
 		item := new(ItemMaster)
 		if err := tx.GetContext(ctx, item, query, itemID, itemType); err != nil {
 			if err == sql.ErrNoRows {
