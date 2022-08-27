@@ -96,6 +96,7 @@ func main() {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
 	defer tp.ForceFlush(ctx) // flushes any pending spans
 	otel.SetTracerProvider(tp)
+	registerOtelsqlDriver()
 
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
@@ -159,6 +160,20 @@ func main() {
 	e.Logger.Error(e.StartServer(e.Server))
 }
 
+var dbDriverName string
+
+func registerOtelsqlDriver() error {
+	// https://github.com/nhatthm/otelsql#trace-query
+	driverName, err := otelsql.Register("mysql",
+		otelsql.TraceQueryWithArgs(),
+	)
+	if err != nil {
+		return err
+	}
+	dbDriverName = driverName
+	return nil
+}
+
 func connectDB(batch bool) (*sqlx.DB, error) {
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
@@ -170,14 +185,7 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		"Asia%2FTokyo",
 		batch,
 	)
-	// https://github.com/nhatthm/otelsql#trace-query
-	driverName, err := otelsql.Register("mysql",
-		otelsql.TraceQueryWithArgs(),
-	)
-	if err != nil {
-		return nil, err
-	}
-	db1, err := sql.Open(driverName, dsn)
+	db1, err := sql.Open(dbDriverName, dsn)
 	if err != nil {
 		return nil, err
 	}
