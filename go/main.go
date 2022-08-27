@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sort"
 	"strconv"
 	"time"
 
@@ -601,8 +600,8 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 	if _, err := tx.NamedExecContext(
 		ctx,
 		"INSERT INTO user_presents"+
-		"(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES "+
-		"(:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)",
+			"(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES "+
+			"(:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)",
 		firstReceivedPresents,
 	); err != nil {
 		return nil, err
@@ -612,8 +611,8 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 	if _, err := tx.NamedExecContext(
 		ctx,
 		"INSERT INTO user_present_all_received_history"+
-		"(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES "+
-		"(:id, :user_id, :present_all_id, :received_at, :created_at, :updated_at)",
+			"(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES "+
+			"(:id, :user_id, :present_all_id, :received_at, :created_at, :updated_at)",
 		receivedPresentHistories,
 	); err != nil {
 		return nil, err
