@@ -42,7 +42,7 @@ function init_db () {
 			"$ISUCON_DB_NAME" 
 }
 
-# TODO: waitとか使いつつ並列実行してもよいかも
-init_db ${ISUCON_DB_HOST1:-$ISUCON_DB_HOST}
-init_db ${ISUCON_DB_HOST2:-$ISUCON_DB_HOST}
-init_db ${ISUCON_DB_HOST3:-$ISUCON_DB_HOST}
+init_db ${ISUCON_DB_HOST1:-$ISUCON_DB_HOST} &
+init_db ${ISUCON_DB_HOST2:-$ISUCON_DB_HOST} &
+init_db ${ISUCON_DB_HOST3:-$ISUCON_DB_HOST} &
+wait
