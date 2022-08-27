@@ -43,6 +43,9 @@ fi
 
 # APP
 if [[ "$INSTANCE_NUM" == 1 ]]; then
+  pushd go
+  /home/isucon/local/golang/bin/go build -o isuconquest
+  popd
   sudo systemctl restart isuconquest.go.service
   sudo systemctl enable isuconquest.go.service
   
@@ -57,7 +60,7 @@ fi
 
 # MYSQL
 if [[ "$INSTANCE_NUM" == 2 ]]; then
-  sudo install -o root -g root -m 644 ./conf/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/mysql.conf.d/mysqld.cnf
+  sudo install -o root -g root -m 644 ./conf/etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/mysql.conf.d/mysqld.cnf
 
   echo "MySQL restart したいなら手動でやってね"
 #  sudo systemctl restart mysql
