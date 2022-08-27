@@ -42,7 +42,7 @@ if [[ "$INSTANCE_NUM" != 1 ]]; then
 fi
 
 # APP
-if [[ "$INSTANCE_NUM" == 1 ]]; then
+if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
   pushd go
   /home/isucon/local/golang/bin/go build -o isuconquest
   popd
@@ -54,7 +54,7 @@ if [[ "$INSTANCE_NUM" == 1 ]]; then
   sudo systemctl status isuconquest.go.service --no-pager
 fi
 
-if [[ "$INSTANCE_NUM" != 1 ]]; then
+if [[ "$INSTANCE_NUM" != 1 && "$INSTANCE_NUM" != 5 ]]; then
   sudo systemctl disable --now isuconquest.go.service
 fi
 
