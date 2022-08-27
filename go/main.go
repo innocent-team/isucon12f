@@ -2130,6 +2130,7 @@ func (h *Handler) home(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusBadRequest, err)
 	}
+	c.Logger().Debugf("GET /user/{userID}/home userID: %d", userID)
 
 	requestAt, err := getRequestTime(c)
 	if err != nil {
