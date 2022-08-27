@@ -105,7 +105,6 @@ func main() {
 	time.Local = time.FixedZone("Local", 9*60*60)
 
 	e := echo.New()
-	e.Debug = true
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
@@ -303,7 +302,6 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		ctx := c.Request().Context()
 		sessID := c.Request().Header.Get("x-session")
 		if sessID == "" {
-			c.Logger().Debugf("sessID (x-session header) is empty")
 			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 		}
 
@@ -323,13 +321,11 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		_db := h.chooseUserDB(sessionUserID)
 		if err := _db.GetContext(ctx, userSession, query, sessID); err != nil {
 			if err == sql.ErrNoRows {
-				c.Logger().Debugf("user session not found (sessID=%s)", sessID)
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
 
-		c.Logger().Debugf("userSession.UserID=%d, userID=%d", userSession.UserID, userID)
 		if userSession.UserID != userID {
 			return errorResponse(c, http.StatusForbidden, ErrForbidden)
 		}
@@ -339,7 +335,6 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 			if _, err = _db.ExecContext(ctx, query, requestAt, sessID); err != nil {
 				return errorResponse(c, http.StatusInternalServerError, err)
 			}
-			c.Logger().Debugf("session has expired (sessID=%s, userSession.UserID=%d, userID=%d)", sessID, userSession.UserID, userID)
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
 		}
 
@@ -2243,7 +2238,7 @@ var lastID int64 = 0
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
-		lastID = time.Now().Unix()*1000 + h.AppID
+		lastID = time.Now().Unix() * 1000 + h.AppID
 	}
 	lastID += 6
 	return lastID, nil
