@@ -1743,6 +1743,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt)
 	if err != nil {
 		if err == ErrUserNotFound || err == ErrItemNotFound {
+			c.Logger().Debugf("error: %v", err)
 			return errorResponse(c, http.StatusNotFound, err)
 		}
 		if err == ErrInvalidItemType {
