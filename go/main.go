@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -13,12 +15,18 @@ import (
 	"strconv"
 	"time"
 
+	"cloud.google.com/go/profiler"
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/nhatthm/otelsql"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel"
+
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 var (
@@ -50,6 +58,44 @@ type Handler struct {
 }
 
 func main() {
+	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
+	// t := time.Now()
+	cfg := profiler.Config{
+		Service: "isuports",
+		// HHmmss-MMDD
+		// XXX: quota突破したのでバージョンを固定する
+		ServiceVersion: "101400-0827",
+		// ProjectID must be set if not running on GCP.
+		ProjectID: projectID,
+
+		// For OpenCensus users:
+		// To see Profiler agent spans in APM backend,
+		// set EnableOCTelemetry to true
+		// EnableOCTelemetry: true,
+	}
+
+	// Profiler initialization, best done as early as possible.
+	if err := profiler.Start(cfg); err != nil {
+		log.Fatal(err)
+	}
+	// Create exporter.
+	ctx := context.Background()
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	if err != nil {
+		log.Fatalf("texporter.NewExporter: %v", err)
+	}
+
+	// Create trace provider with the exporter.
+	//
+	// By default it uses AlwaysSample() which samples all traces.
+	// In a production environment or high QPS setup please use
+	// probabilistic sampling.
+	// Example:
+	//   tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0.0001)), ...)
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+	defer tp.ForceFlush(ctx) // flushes any pending spans
+	otel.SetTracerProvider(tp)
+
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
 
@@ -122,11 +168,18 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		"Asia%2FTokyo",
 		batch,
 	)
-	dbx, err := sqlx.Open("mysql", dsn)
+	// https://github.com/nhatthm/otelsql#trace-query
+	driverName, err := otelsql.Register("mysql",
+		otelsql.TraceQueryWithArgs(),
+	)
 	if err != nil {
 		return nil, err
 	}
-	return dbx, nil
+	db1, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	return sqlx.NewDb(db1, "mysql"), nil
 }
 
 // adminMiddleware
