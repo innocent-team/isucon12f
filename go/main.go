@@ -563,7 +563,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
 	}
 
-	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt)
+	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt, false)
 	if err != nil {
 		return nil, err
 	}
@@ -687,6 +687,8 @@ type ItemObtainerObtainItem struct {
 }
 
 type ItemObtainer struct {
+	// ids
+	obtainIDs []int64
 	// coins (獲得した個数のスライス)
 	obtainCoins []int64
 	// cards (item_masters.id のスライス)
@@ -696,6 +698,7 @@ type ItemObtainer struct {
 }
 
 func (obtainer *ItemObtainer) ObtainItem(itemID int64, itemType int, obtainAmount int64) error {
+	obtainer.obtainIDs = append(obtainer.obtainIDs, itemID)
 	itemOrder := 0
 	switch itemType {
 	case 1: // coin
@@ -712,6 +715,16 @@ func (obtainer *ItemObtainer) ObtainItem(itemID int64, itemType int, obtainAmoun
 		itemOrder++
 	default:
 		return ErrInvalidItemType
+	}
+	return nil
+}
+
+func (obtainer *ItemObtainer) commitIDs(ctx context.Context, tx *sqlx.Tx, userID int64) error {
+	query := "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id IN (?)"
+	//TODO inをいい感じにしてほしい
+	_, err := tx.In(ctx, query, requestAt, requestAt, obtainer.obtainIDs)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -892,7 +905,13 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	return obtainItems, nil
 }
 
-func (obtainer *ItemObtainer) Commit(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64) ([]int64, []*UserCard, []*UserItem, error) {
+func (obtainer *ItemObtainer) Commit(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64, commitID bool) ([]int64, []*UserCard, []*UserItem, error) {
+	if commitID {
+		err := obtainer.commitIDs(ctx, tx, userID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	obtainCoins, err := obtainer.commitCoins(ctx, tx, userID)
 	if err != nil {
 		return nil, nil, nil, err
@@ -1620,11 +1639,6 @@ func (h *Handler) receivePresent(c echo.Context) error {
 		obtainPresent[i].UpdatedAt = requestAt
 		obtainPresent[i].DeletedAt = &requestAt
 		v := obtainPresent[i]
-		query = "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=?"
-		_, err := tx.ExecContext(ctx, query, requestAt, requestAt, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
 
 		err = obtainer.ObtainItem(v.ItemID, v.ItemType, int64(v.Amount))
 		if err != nil {
@@ -1638,7 +1652,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 		}
 	}
 
-	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt)
+	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt, true)
 	if err != nil {
 		if err == ErrUserNotFound || err == ErrItemNotFound {
 			c.Logger().Debugf("error: %v", err)
@@ -2236,7 +2250,7 @@ var lastID int64 = 0
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
-		lastID = time.Now().Unix() * 1000 + h.AppID
+		lastID = time.Now().Unix()*1000 + h.AppID
 	}
 	lastID += 6
 	return lastID, nil
