@@ -438,6 +438,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
+	var obtainer *ItemObtainer
 	for _, bonus := range loginBonuses {
 		initBonus := false
 		// ボーナスの進捗取得
@@ -485,7 +486,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 			return nil, err
 		}
 
-		_, _, _, err := h.obtainItem(ctx, tx, userID, rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount, requestAt)
+		err := obtainer.ObtainItem(rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount)
 		if err != nil {
 			return nil, err
 		}
@@ -504,6 +505,11 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		}
 
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
+	}
+
+	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt)
+	if err != nil {
+		return nil, err
 	}
 
 	return sendLoginBonuses, nil
