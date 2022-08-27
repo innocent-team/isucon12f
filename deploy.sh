@@ -59,7 +59,7 @@ if [[ "$INSTANCE_NUM" != 1 ]]; then
 fi
 
 # MYSQL
-if [[ "$INSTANCE_NUM" == 2 ]]; then
+if [[ "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 3 || "$INSTANCE_NUM" == 4 ]]; then
   sudo install -o root -g root -m 644 ./conf/etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/mysql.conf.d/mysqld.cnf
 
   echo "MySQL restart したいなら手動でやってね"
@@ -67,6 +67,6 @@ if [[ "$INSTANCE_NUM" == 2 ]]; then
   sudo systemctl enable --now mysql
 fi
 
-if [[ "$INSTANCE_NUM" != 2 ]]; then
+if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
   sudo systemctl disable --now mysql.service
 fi
