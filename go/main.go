@@ -818,13 +818,15 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	var obtainItems []*UserItem
 
 	// 初めて取得したアイテムについてINSERT
-	if _, err := tx.NamedExecContext(
-		ctx,
-		"INSERT INTO user_items"+
-			"(id, user_id, item_id, item_type, amount, created_at, updated_at) VALUES "+
-			"(:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)",
-		firstObtainedItems); err != nil {
-		return nil, err
+	if len(firstObtainedItems) > 0 {
+		if _, err := tx.NamedExecContext(
+			ctx,
+			"INSERT INTO user_items"+
+				"(id, user_id, item_id, item_type, amount, created_at, updated_at) VALUES "+
+				"(:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)",
+			firstObtainedItems); err != nil {
+			return nil, err
+		}
 	}
 	obtainItems = append(obtainItems, firstObtainedItems...)
 
