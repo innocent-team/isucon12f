@@ -495,18 +495,36 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 		return nil, err
 	}
 
+	// ユーザーの受け取り履歴を構築する
+	var normalPresentIDs []int64
+	for _, np := range normalPresents {
+		normalPresentIDs = append(normalPresentIDs, np.ID)
+	}
+	query, args, err := sqlx.In(
+		"SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id IN (?)",
+		userID,
+		normalPresentIDs,
+	)
+	// TODO: normalPresentIDsが長さ0のときのハンドリング
+	if err != nil {
+		return nil, err
+	}
+	var userReceivedHistories []UserPresentAllReceivedHistory
+	err = tx.SelectContext(ctx, &userReceivedHistories, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	isReceivedPresent := make(map[int64]bool)
+	for _, history := range userReceivedHistories {
+		isReceivedPresent[history.PresentAllID] = true
+	}
+
 	// 全員プレゼント取得情報更新
 	obtainPresents := make([]*UserPresent, 0)
 	for _, np := range normalPresents {
-		received := new(UserPresentAllReceivedHistory)
-		query = "SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id=?"
-		err := tx.GetContext(ctx, received, query, userID, np.ID)
-		if err == nil {
-			// プレゼント配布済
+		// 受け取り済ならスキップ
+		if _, ok := isReceivedPresent[np.ID]; ok {
 			continue
-		}
-		if err != sql.ErrNoRows {
-			return nil, err
 		}
 
 		// user present boxに入れる
