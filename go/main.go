@@ -55,7 +55,7 @@ const (
 )
 
 type Handler struct {
-	DB *sqlx.DB
+	DB      *sqlx.DB
 	UserDBs []*sqlx.DB
 }
 
@@ -126,7 +126,7 @@ func main() {
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
-		DB: dbx,
+		DB:      dbx,
 		UserDBs: userDBs,
 	}
 
@@ -201,19 +201,20 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 
 // ユーザーIDに応じたuser DBのコネクションを返す
 func (h *Handler) chooseUserDB(userID int64) *sqlx.DB {
-	return h.UserDBs[userID % 3]
+	return h.UserDBs[userID%3]
 }
 
 func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 	var conns []*sqlx.DB
 	for i := 0; i < 3; i++ {
 		// ISUCON_DB_HOST1, ISUCON_DB_HOST2, ISUCON_DB_HOST3
-		hostname := fmt.Sprintf("ISUCON_DB_HOST%d", i + 1)
+		hostname := fmt.Sprintf("ISUCON_DB_HOST%d", i+1)
 		dsn := fmt.Sprintf(
 			"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
 			getEnv("ISUCON_DB_USER", "isucon"),
 			getEnv("ISUCON_DB_PASSWORD", "isucon"),
-			getEnv(hostname, "127.0.0.1"),
+			// ISUCON_DB_HOST{1,2,3} がsetされていなかったらISUCON_DB_HOSTにフォールバック
+			getEnv(hostname, getEnv("ISUCON_DB_HOST", "127.0.0.1")),
 			getEnv("ISUCON_DB_PORT", "3306"),
 			getEnv("ISUCON_DB_NAME", "isucon"),
 			"Asia%2FTokyo",
