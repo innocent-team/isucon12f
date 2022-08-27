@@ -56,6 +56,7 @@ const (
 
 type Handler struct {
 	DB *sqlx.DB
+	UserDBs []*sqlx.DB
 }
 
 func main() {
@@ -117,10 +118,16 @@ func main() {
 	}
 	defer dbx.Close()
 
+	userDBs, err := connectUserDB(false)
+	if err != nil {
+		e.Logger.Fatalf("failed to connect to user db: %v", err)
+	}
+
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
 		DB: dbx,
+		UserDBs: userDBs,
 	}
 
 	// e.Use(middleware.CORS())
@@ -190,6 +197,35 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		return nil, err
 	}
 	return sqlx.NewDb(db1, "mysql"), nil
+}
+
+// ユーザーIDに応じたuser DBのコネクションを返す
+func (h *Handler) chooseUserDB(userID int64) *sqlx.DB {
+	return h.UserDBs[userID % 3]
+}
+
+func connectUserDB(batch bool) ([]*sqlx.DB, error) {
+	var conns []*sqlx.DB
+	for i := 0; i < 3; i++ {
+		// ISUCON_DB_HOST1, ISUCON_DB_HOST2, ISUCON_DB_HOST3
+		hostname := fmt.Sprintf("ISUCON_DB_HOST%d", i + 1)
+		dsn := fmt.Sprintf(
+			"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
+			getEnv("ISUCON_DB_USER", "isucon"),
+			getEnv("ISUCON_DB_PASSWORD", "isucon"),
+			getEnv(hostname, "127.0.0.1"),
+			getEnv("ISUCON_DB_PORT", "3306"),
+			getEnv("ISUCON_DB_NAME", "isucon"),
+			"Asia%2FTokyo",
+			batch,
+		)
+		db1, err := sql.Open(dbDriverName, dsn)
+		if err != nil {
+			return nil, err
+		}
+		conns = append(conns, sqlx.NewDb(db1, "mysql"))
+	}
+	return conns, nil
 }
 
 // adminMiddleware
@@ -868,6 +904,13 @@ func initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 	defer dbx.Close()
+	userDBs, err := connectUserDB(true)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	for _, userDB := range userDBs {
+		defer userDB.Close()
+	}
 
 	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
 	if err != nil {
