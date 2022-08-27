@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -16,19 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/profiler"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/nhatthm/otelsql"
 	"github.com/pkg/errors"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
-	"go.opentelemetry.io/otel"
-
-	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 var (
@@ -62,50 +54,10 @@ type Handler struct {
 }
 
 func main() {
-	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
-	// t := time.Now()
-	cfg := profiler.Config{
-		Service: "isuports",
-		// HHmmss-MMDD
-		// XXX: quota突破したのでバージョンを固定する
-		ServiceVersion: "101400-0827",
-		// ProjectID must be set if not running on GCP.
-		ProjectID: projectID,
-
-		// For OpenCensus users:
-		// To see Profiler agent spans in APM backend,
-		// set EnableOCTelemetry to true
-		// EnableOCTelemetry: true,
-	}
-
-	// Profiler initialization, best done as early as possible.
-	if err := profiler.Start(cfg); err != nil {
-		log.Fatal(err)
-	}
-	// Create exporter.
-	ctx := context.Background()
-	exporter, err := texporter.New(texporter.WithProjectID(projectID))
-	if err != nil {
-		log.Fatalf("texporter.NewExporter: %v", err)
-	}
-
-	// Create trace provider with the exporter.
-	//
-	// By default it uses AlwaysSample() which samples all traces.
-	// In a production environment or high QPS setup please use
-	// probabilistic sampling.
-	// Example:
-	//   tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0.0001)), ...)
-	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
-	defer tp.ForceFlush(ctx) // flushes any pending spans
-	otel.SetTracerProvider(tp)
-	registerOtelsqlDriver()
-
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
 
 	e := echo.New()
-	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
@@ -139,7 +91,6 @@ func main() {
 	}
 
 	// e.Use(middleware.CORS())
-	e.Use(otelecho.Middleware("isuports"))
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
@@ -183,20 +134,6 @@ func main() {
 	e.Logger.Error(e.StartServer(e.Server))
 }
 
-var dbDriverName string
-
-func registerOtelsqlDriver() error {
-	// https://github.com/nhatthm/otelsql#trace-query
-	driverName, err := otelsql.Register("mysql",
-		otelsql.TraceQueryWithArgs(),
-	)
-	if err != nil {
-		return err
-	}
-	dbDriverName = driverName
-	return nil
-}
-
 func connectDB(batch bool) (*sqlx.DB, error) {
 	dsn := fmt.Sprintf(
 		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=%s&multiStatements=%t&interpolateParams=true",
@@ -208,11 +145,7 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		"Asia%2FTokyo",
 		batch,
 	)
-	db1, err := sql.Open(dbDriverName, dsn)
-	if err != nil {
-		return nil, err
-	}
-	return sqlx.NewDb(db1, "mysql"), nil
+	return sqlx.Open("mysql", dsn)
 }
 
 // ユーザーIDに応じたuser DBのコネクションを返す
@@ -236,11 +169,11 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 			"Asia%2FTokyo",
 			batch,
 		)
-		db1, err := sql.Open(dbDriverName, dsn)
+		db, err := sqlx.Open("mysql", dsn)
 		if err != nil {
 			return nil, err
 		}
-		conns = append(conns, sqlx.NewDb(db1, "mysql"))
+		conns = append(conns, db)
 	}
 	return conns, nil
 }
@@ -2190,7 +2123,7 @@ func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
 		lastID = time.Now().Unix()*1000 + h.AppID
 	}
-	lastID += 6
+	lastID += 7
 	return lastID, nil
 }
 
