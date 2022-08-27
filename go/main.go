@@ -582,6 +582,14 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 		})
 	}
 
+	// bulk insertするものがないときは抜ける
+	if len(firstReceivedPresents) == 0 {
+		return firstReceivedPresents, nil
+	}
+	if len(receivedPresentHistories) == 0 {
+		return firstReceivedPresents, nil
+	}
+
 	// user present boxにbulk insert
 	if _, err := tx.NamedExecContext(
 		ctx,
