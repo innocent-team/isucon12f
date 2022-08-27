@@ -1376,7 +1376,14 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	// random値の導出 & 抽選
-	gachaName, result, err := localGachaMasters.Pick(c, h, gachaID, gachaCount, requestAt)
+	gachaIDint, err := strconv.ParseInt(gachaID, 10, 64)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	gachaName, result, err := localGachaMasters.Pick(c, h, gachaIDint, gachaCount, requestAt)
+	if err != nil {
+		return err
+	}
 
 	tx, err := _db.Beginx()
 	if err != nil {
@@ -2168,7 +2175,7 @@ var lastID int64 = 0
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
-		lastID = time.Now().Unix() * 1000 + h.AppID
+		lastID = time.Now().Unix()*1000 + h.AppID
 	}
 	lastID += 6
 	return lastID, nil

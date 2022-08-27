@@ -1,7 +1,6 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -14,6 +13,7 @@ var localGachaMasters = LocalGachaMasters{
 	GachaMasters:           []*GachaMaster{},
 	GachaItemListByGachaID: map[int64][]*GachaItemMaster{},
 	GachaItemList:          []*GachaItemMaster{},
+	GachaItemWeightSum:     map[int64]int64{},
 }
 
 type LocalGachaMasters struct {
@@ -21,6 +21,7 @@ type LocalGachaMasters struct {
 	GachaMasters           []*GachaMaster
 	GachaItemListByGachaID map[int64][]*GachaItemMaster
 	GachaItemList          []*GachaItemMaster
+	GachaItemWeightSum     map[int64]int64
 }
 
 // ガチャのマスターデータのキャッシュを更新する
@@ -47,6 +48,12 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.GachaItemList = gachaItemList
 	for _, gachaItem := range gachaItemList {
 		l.GachaItemListByGachaID[gachaItem.ID] = append(l.GachaItemListByGachaID[gachaItem.ID], gachaItem)
+	}
+
+	for gachaID, gachaItems := range l.GachaItemListByGachaID {
+		for _, gachaItem := range gachaItems {
+			l.GachaItemWeightSum[gachaID] += int64(gachaItem.Weight)
+		}
 	}
 
 	return nil
@@ -87,37 +94,26 @@ func (l *LocalGachaMasters) List(c echo.Context, h *Handler, requestAt int64) ([
 }
 
 // 返り値1つ目はガチャ名
-func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID string, gachaCount int64, requestAt int64) (string, []*GachaItemMaster, error) {
-	ctx := c.Request().Context()
-
+func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gachaCount int64, requestAt int64) (string, []*GachaItemMaster, error) {
 	// gachaIDからガチャマスタの取得
-	query := "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
-	gachaInfo := new(GachaMaster)
-	if err := h.DB.GetContext(ctx, gachaInfo, query, gachaID, requestAt, requestAt); err != nil {
-		if sql.ErrNoRows == err {
-			return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
-		}
-		return "", nil, errorResponse(c, http.StatusInternalServerError, err)
+	gachaInfo, ok := l.GachaMasterByID[gachaID]
+	if !ok || !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt) {
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
 	}
 
 	// gachaItemMasterからアイテムリスト取得
-	gachaItemList := make([]*GachaItemMaster, 0)
-	err := h.DB.SelectContext(ctx, &gachaItemList, "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC", gachaID)
-	if err != nil {
-		return "", nil, errorResponse(c, http.StatusInternalServerError, err)
+	gachaItemList, ok := l.GachaItemListByGachaID[gachaID]
+	if !ok {
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
 	}
 	if len(gachaItemList) == 0 {
 		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
 	}
 
 	// weightの合計値を算出
-	var sum int64
-	err = h.DB.GetContext(ctx, &sum, "SELECT SUM(weight) FROM gacha_item_masters WHERE gacha_id=?", gachaID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", nil, errorResponse(c, http.StatusNotFound, err)
-		}
-		return "", nil, errorResponse(c, http.StatusInternalServerError, err)
+	sum, ok := l.GachaItemWeightSum[gachaID]
+	if !ok {
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item sum"))
 	}
 
 	// random値の導出 & 抽選
