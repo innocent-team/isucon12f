@@ -2236,9 +2236,9 @@ var lastID int64 = 0
 // generateID uniqueなIDを生成する
 func (h *Handler) generateID(ctx context.Context) (int64, error) {
 	if lastID == 0 {
-		lastID = time.Now().Unix() * 10000000 * (h.AppID + 1)
+		lastID = time.Now().Unix() * 1000 + h.AppID
 	}
-	lastID += 1
+	lastID += 6
 	return lastID, nil
 }
 
