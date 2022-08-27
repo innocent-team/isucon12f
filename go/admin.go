@@ -8,12 +8,18 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // //////////////////////////////////////
 // admin
+
+func (h *Handler) adminDB() *sqlx.DB {
+	// 1番目に決め打ち
+	return h.UserDBs[0]
+}
 
 // adminSessionCheckMiddleware
 func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
@@ -23,8 +29,7 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 
 		adminSession := new(Session)
 		query := "SELECT * FROM admin_sessions WHERE session_id=? AND deleted_at IS NULL"
-		_db := h.DB
-		if err := _db.GetContext(ctx, adminSession, query, sessID); err != nil {
+		if err := h.adminDB().GetContext(ctx, adminSession, query, sessID); err != nil {
 			if err == sql.ErrNoRows {
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 			}
@@ -38,7 +43,7 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 
 		if adminSession.ExpiredAt < requestAt {
 			query = "UPDATE admin_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = _db.ExecContext(ctx, query, requestAt, sessID); err != nil {
+			if _, err = h.adminDB().ExecContext(ctx, query, requestAt, sessID); err != nil {
 				return errorResponse(c, http.StatusInternalServerError, err)
 			}
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
@@ -68,8 +73,7 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	_db := h.DB
-	tx, err := _db.Beginx()
+	tx, err := h.adminDB().Beginx()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -155,8 +159,7 @@ func (h *Handler) adminLogout(c echo.Context) error {
 	}
 	// すでにあるsessionをdeleteにする
 	query := "UPDATE admin_sessions SET deleted_at=? WHERE session_id=? AND deleted_at IS NULL"
-	_db := h.DB
-	if _, err = _db.ExecContext(ctx, query, requestAt, sessID); err != nil {
+	if _, err = h.adminDB().ExecContext(ctx, query, requestAt, sessID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -168,40 +171,39 @@ func (h *Handler) adminLogout(c echo.Context) error {
 func (h *Handler) adminListMaster(c echo.Context) error {
 	ctx := c.Request().Context()
 	masterVersions := make([]*VersionMaster, 0)
-	_db := h.DB
-	if err := _db.SelectContext(ctx, &masterVersions, "SELECT * FROM version_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &masterVersions, "SELECT * FROM version_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	items := make([]*ItemMaster, 0)
-	if err := _db.SelectContext(ctx, &items, "SELECT * FROM item_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &items, "SELECT * FROM item_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	gachas := make([]*GachaMaster, 0)
-	if err := _db.SelectContext(ctx, &gachas, "SELECT * FROM gacha_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &gachas, "SELECT * FROM gacha_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	gachaItems := make([]*GachaItemMaster, 0)
-	if err := _db.SelectContext(ctx, &gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	presentAlls := make([]*PresentAllMaster, 0)
-	if err := _db.SelectContext(ctx, &presentAlls, "SELECT * FROM present_all_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &presentAlls, "SELECT * FROM present_all_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 
 	}
 
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	if err := _db.SelectContext(ctx, &loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 
 	}
 
 	loginBonusRewards := make([]*LoginBonusRewardMaster, 0)
-	if err := _db.SelectContext(ctx, &loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+	if err := h.adminDB().SelectContext(ctx, &loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -229,271 +231,275 @@ type AdminListMasterResponse struct {
 // adminUpdateMaster マスタデータ更新
 // PUT /admin/master
 func (h *Handler) adminUpdateMaster(c echo.Context) error {
-	_db := h.DB
-	tx, err := _db.Beginx()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	defer tx.Rollback() //nolint:errcheck
+	var activeMaster *VersionMaster
 
-	// version master
-	versionMasterRecs, err := readFormFileToCSV(c, "versionMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if versionMasterRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range versionMasterRecs {
-			if i == 0 {
-				continue
-			}
-			data = append(data, map[string]interface{}{
-				"id":             v[0],
-				"status":         v[1],
-				"master_version": v[2],
-			})
-		}
+	for _, db := range h.UserDBs {
 
-		query := "INSERT INTO version_masters(id, status, master_version) VALUES (:id, :status, :master_version) ON DUPLICATE KEY UPDATE status=VALUES(status), master_version=VALUES(master_version)"
-		if _, err = tx.NamedExec(query, data); err != nil {
+		tx, err := db.Beginx()
+		if err != nil {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
-	} else {
-		c.Logger().Debug("Skip Update Master: versionMaster")
-	}
+		defer tx.Rollback() //nolint:errcheck
 
-	// item
-	itemMasterRecs, err := readFormFileToCSV(c, "itemMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if itemMasterRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range itemMasterRecs {
-			if i == 0 {
-				continue
+		// version master
+		versionMasterRecs, err := readFormFileToCSV(c, "versionMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
 			}
-			data = append(data, map[string]interface{}{
-				"id":                 v[0],
-				"item_type":          v[1],
-				"name":               v[2],
-				"description":        v[3],
-				"amount_per_sec":     v[4],
-				"max_level":          v[5],
-				"max_amount_per_sec": v[6],
-				"base_exp_per_level": v[7],
-				"gained_exp":         v[8],
-				"shortening_min":     v[9],
-			})
+		}
+		if versionMasterRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range versionMasterRecs {
+				if i == 0 {
+					continue
+				}
+				data = append(data, map[string]interface{}{
+					"id":             v[0],
+					"status":         v[1],
+					"master_version": v[2],
+				})
+			}
+
+			query := "INSERT INTO version_masters(id, status, master_version) VALUES (:id, :status, :master_version) ON DUPLICATE KEY UPDATE status=VALUES(status), master_version=VALUES(master_version)"
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: versionMaster")
 		}
 
-		query := strings.Join([]string{
-			"INSERT INTO item_masters(id, item_type, name, description, amount_per_sec, max_level, max_amount_per_sec, base_exp_per_level, gained_exp, shortening_min)",
-			"VALUES (:id, :item_type, :name, :description, :amount_per_sec, :max_level, :max_amount_per_sec, :base_exp_per_level, :gained_exp, :shortening_min)",
-			"ON DUPLICATE KEY UPDATE item_type=VALUES(item_type), name=VALUES(name), description=VALUES(description), amount_per_sec=VALUES(amount_per_sec), max_level=VALUES(max_level), max_amount_per_sec=VALUES(max_amount_per_sec), base_exp_per_level=VALUES(base_exp_per_level), gained_exp=VALUES(gained_exp), shortening_min=VALUES(shortening_min)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
+		// item
+		itemMasterRecs, err := readFormFileToCSV(c, "itemMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+		}
+		if itemMasterRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range itemMasterRecs {
+				if i == 0 {
+					continue
+				}
+				data = append(data, map[string]interface{}{
+					"id":                 v[0],
+					"item_type":          v[1],
+					"name":               v[2],
+					"description":        v[3],
+					"amount_per_sec":     v[4],
+					"max_level":          v[5],
+					"max_amount_per_sec": v[6],
+					"base_exp_per_level": v[7],
+					"gained_exp":         v[8],
+					"shortening_min":     v[9],
+				})
+			}
+
+			query := strings.Join([]string{
+				"INSERT INTO item_masters(id, item_type, name, description, amount_per_sec, max_level, max_amount_per_sec, base_exp_per_level, gained_exp, shortening_min)",
+				"VALUES (:id, :item_type, :name, :description, :amount_per_sec, :max_level, :max_amount_per_sec, :base_exp_per_level, :gained_exp, :shortening_min)",
+				"ON DUPLICATE KEY UPDATE item_type=VALUES(item_type), name=VALUES(name), description=VALUES(description), amount_per_sec=VALUES(amount_per_sec), max_level=VALUES(max_level), max_amount_per_sec=VALUES(max_amount_per_sec), base_exp_per_level=VALUES(base_exp_per_level), gained_exp=VALUES(gained_exp), shortening_min=VALUES(shortening_min)",
+			}, " ")
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: itemMaster")
+		}
+
+		// gacha
+		gachaRecs, err := readFormFileToCSV(c, "gachaMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+		}
+		if gachaRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range gachaRecs {
+				if i == 0 {
+					continue
+				}
+				data = append(data, map[string]interface{}{
+					"id":            v[0],
+					"name":          v[1],
+					"start_at":      v[2],
+					"end_at":        v[3],
+					"display_order": v[4],
+					"created_at":    v[5],
+				})
+			}
+
+			query := strings.Join([]string{
+				"INSERT INTO gacha_masters(id, name, start_at, end_at, display_order, created_at)",
+				"VALUES (:id, :name, :start_at, :end_at, :display_order, :created_at)",
+				"ON DUPLICATE KEY UPDATE name=VALUES(name), start_at=VALUES(start_at), end_at=VALUES(end_at), display_order=VALUES(display_order), created_at=VALUES(created_at)",
+			}, " ")
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: gachaMaster")
+		}
+
+		// gacha item
+		gachaItemRecs, err := readFormFileToCSV(c, "gachaItemMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+		}
+		if gachaItemRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range gachaItemRecs {
+				if i == 0 {
+					continue
+				}
+				data = append(data, map[string]interface{}{
+					"id":         v[0],
+					"gacha_id":   v[1],
+					"item_type":  v[2],
+					"item_id":    v[3],
+					"amount":     v[4],
+					"weight":     v[5],
+					"created_at": v[6],
+				})
+			}
+
+			query := strings.Join([]string{
+				"INSERT INTO gacha_item_masters(id, gacha_id, item_type, item_id, amount, weight, created_at)",
+				"VALUES (:id, :gacha_id, :item_type, :item_id, :amount, :weight, :created_at)",
+				"ON DUPLICATE KEY UPDATE gacha_id=VALUES(gacha_id), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), weight=VALUES(weight), created_at=VALUES(created_at)",
+			}, " ")
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: gachaItemMaster")
+		}
+
+		// present all
+		presentAllRecs, err := readFormFileToCSV(c, "presentAllMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+		}
+		if presentAllRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range presentAllRecs {
+				if i == 0 {
+					continue
+				}
+				data = append(data, map[string]interface{}{
+					"id":                  v[0],
+					"registered_start_at": v[1],
+					"registered_end_at":   v[2],
+					"item_type":           v[3],
+					"item_id":             v[4],
+					"amount":              v[5],
+					"present_message":     v[6],
+					"created_at":          v[7],
+				})
+			}
+
+			query := strings.Join([]string{
+				"INSERT INTO present_all_masters(id, registered_start_at, registered_end_at, item_type, item_id, amount, present_message, created_at)",
+				"VALUES (:id, :registered_start_at, :registered_end_at, :item_type, :item_id, :amount, :present_message, :created_at)",
+				"ON DUPLICATE KEY UPDATE registered_start_at=VALUES(registered_start_at), registered_end_at=VALUES(registered_end_at), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), present_message=VALUES(present_message), created_at=VALUES(created_at)",
+			}, " ")
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: presentAllMaster")
+		}
+
+		// login bonuses
+		loginBonusRecs, err := readFormFileToCSV(c, "loginBonusMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+		}
+		if loginBonusRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range loginBonusRecs {
+				if i == 0 {
+					continue
+				}
+				looped := 0
+				if v[4] == "TRUE" {
+					looped = 1
+				}
+				data = append(data, map[string]interface{}{
+					"id":           v[0],
+					"start_at":     v[1],
+					"end_at":       v[2],
+					"column_count": v[3],
+					"looped":       looped,
+					"created_at":   v[5],
+				})
+			}
+
+			query := strings.Join([]string{
+				"INSERT INTO login_bonus_masters(id, start_at, end_at, column_count, looped, created_at)",
+				"VALUES (:id, :start_at, :end_at, :column_count, :looped, :created_at)",
+				"ON DUPLICATE KEY UPDATE start_at=VALUES(start_at), end_at=VALUES(end_at), column_count=VALUES(column_count), looped=VALUES(looped), created_at=VALUES(created_at)",
+			}, " ")
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: loginBonusMaster")
+		}
+
+		// login bonus rewards
+		loginBonusRewardRecs, err := readFormFileToCSV(c, "loginBonusRewardMaster")
+		if err != nil {
+			if err != ErrNoFormFile {
+				return errorResponse(c, http.StatusBadRequest, err)
+			}
+		}
+		if loginBonusRewardRecs != nil {
+			data := []map[string]interface{}{}
+			for i, v := range loginBonusRewardRecs {
+				if i == 0 {
+					continue
+				}
+				data = append(data, map[string]interface{}{
+					"id":              v[0],
+					"login_bonus_id":  v[1],
+					"reward_sequence": v[2],
+					"item_type":       v[3],
+					"item_id":         v[4],
+					"amount":          v[5],
+					"created_at":      v[6],
+				})
+			}
+
+			query := strings.Join([]string{
+				"INSERT INTO login_bonus_reward_masters(id, login_bonus_id, reward_sequence, item_type, item_id, amount, created_at)",
+				"VALUES (:id, :login_bonus_id, :reward_sequence, :item_type, :item_id, :amount, :created_at)",
+				"ON DUPLICATE KEY UPDATE login_bonus_id=VALUES(login_bonus_id), reward_sequence=VALUES(reward_sequence), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), created_at=VALUES(created_at)",
+			}, " ")
+			if _, err = tx.NamedExec(query, data); err != nil {
+				return errorResponse(c, http.StatusInternalServerError, err)
+			}
+		} else {
+			c.Logger().Debug("Skip Update Master: loginBonusRewardMaster")
+		}
+
+		activeMaster = new(VersionMaster)
+		if err = tx.Get(activeMaster, "SELECT * FROM version_masters WHERE status=1"); err != nil {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
-	} else {
-		c.Logger().Debug("Skip Update Master: itemMaster")
-	}
 
-	// gacha
-	gachaRecs, err := readFormFileToCSV(c, "gachaMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if gachaRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range gachaRecs {
-			if i == 0 {
-				continue
-			}
-			data = append(data, map[string]interface{}{
-				"id":            v[0],
-				"name":          v[1],
-				"start_at":      v[2],
-				"end_at":        v[3],
-				"display_order": v[4],
-				"created_at":    v[5],
-			})
-		}
-
-		query := strings.Join([]string{
-			"INSERT INTO gacha_masters(id, name, start_at, end_at, display_order, created_at)",
-			"VALUES (:id, :name, :start_at, :end_at, :display_order, :created_at)",
-			"ON DUPLICATE KEY UPDATE name=VALUES(name), start_at=VALUES(start_at), end_at=VALUES(end_at), display_order=VALUES(display_order), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
+		err = tx.Commit()
+		if err != nil {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
-	} else {
-		c.Logger().Debug("Skip Update Master: gachaMaster")
-	}
-
-	// gacha item
-	gachaItemRecs, err := readFormFileToCSV(c, "gachaItemMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if gachaItemRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range gachaItemRecs {
-			if i == 0 {
-				continue
-			}
-			data = append(data, map[string]interface{}{
-				"id":         v[0],
-				"gacha_id":   v[1],
-				"item_type":  v[2],
-				"item_id":    v[3],
-				"amount":     v[4],
-				"weight":     v[5],
-				"created_at": v[6],
-			})
-		}
-
-		query := strings.Join([]string{
-			"INSERT INTO gacha_item_masters(id, gacha_id, item_type, item_id, amount, weight, created_at)",
-			"VALUES (:id, :gacha_id, :item_type, :item_id, :amount, :weight, :created_at)",
-			"ON DUPLICATE KEY UPDATE gacha_id=VALUES(gacha_id), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), weight=VALUES(weight), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-	} else {
-		c.Logger().Debug("Skip Update Master: gachaItemMaster")
-	}
-
-	// present all
-	presentAllRecs, err := readFormFileToCSV(c, "presentAllMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if presentAllRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range presentAllRecs {
-			if i == 0 {
-				continue
-			}
-			data = append(data, map[string]interface{}{
-				"id":                  v[0],
-				"registered_start_at": v[1],
-				"registered_end_at":   v[2],
-				"item_type":           v[3],
-				"item_id":             v[4],
-				"amount":              v[5],
-				"present_message":     v[6],
-				"created_at":          v[7],
-			})
-		}
-
-		query := strings.Join([]string{
-			"INSERT INTO present_all_masters(id, registered_start_at, registered_end_at, item_type, item_id, amount, present_message, created_at)",
-			"VALUES (:id, :registered_start_at, :registered_end_at, :item_type, :item_id, :amount, :present_message, :created_at)",
-			"ON DUPLICATE KEY UPDATE registered_start_at=VALUES(registered_start_at), registered_end_at=VALUES(registered_end_at), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), present_message=VALUES(present_message), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-	} else {
-		c.Logger().Debug("Skip Update Master: presentAllMaster")
-	}
-
-	// login bonuses
-	loginBonusRecs, err := readFormFileToCSV(c, "loginBonusMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if loginBonusRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range loginBonusRecs {
-			if i == 0 {
-				continue
-			}
-			looped := 0
-			if v[4] == "TRUE" {
-				looped = 1
-			}
-			data = append(data, map[string]interface{}{
-				"id":           v[0],
-				"start_at":     v[1],
-				"end_at":       v[2],
-				"column_count": v[3],
-				"looped":       looped,
-				"created_at":   v[5],
-			})
-		}
-
-		query := strings.Join([]string{
-			"INSERT INTO login_bonus_masters(id, start_at, end_at, column_count, looped, created_at)",
-			"VALUES (:id, :start_at, :end_at, :column_count, :looped, :created_at)",
-			"ON DUPLICATE KEY UPDATE start_at=VALUES(start_at), end_at=VALUES(end_at), column_count=VALUES(column_count), looped=VALUES(looped), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-	} else {
-		c.Logger().Debug("Skip Update Master: loginBonusMaster")
-	}
-
-	// login bonus rewards
-	loginBonusRewardRecs, err := readFormFileToCSV(c, "loginBonusRewardMaster")
-	if err != nil {
-		if err != ErrNoFormFile {
-			return errorResponse(c, http.StatusBadRequest, err)
-		}
-	}
-	if loginBonusRewardRecs != nil {
-		data := []map[string]interface{}{}
-		for i, v := range loginBonusRewardRecs {
-			if i == 0 {
-				continue
-			}
-			data = append(data, map[string]interface{}{
-				"id":              v[0],
-				"login_bonus_id":  v[1],
-				"reward_sequence": v[2],
-				"item_type":       v[3],
-				"item_id":         v[4],
-				"amount":          v[5],
-				"created_at":      v[6],
-			})
-		}
-
-		query := strings.Join([]string{
-			"INSERT INTO login_bonus_reward_masters(id, login_bonus_id, reward_sequence, item_type, item_id, amount, created_at)",
-			"VALUES (:id, :login_bonus_id, :reward_sequence, :item_type, :item_id, :amount, :created_at)",
-			"ON DUPLICATE KEY UPDATE login_bonus_id=VALUES(login_bonus_id), reward_sequence=VALUES(reward_sequence), item_type=VALUES(item_type), item_id=VALUES(item_id), amount=VALUES(amount), created_at=VALUES(created_at)",
-		}, " ")
-		if _, err = tx.NamedExec(query, data); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
-	} else {
-		c.Logger().Debug("Skip Update Master: loginBonusRewardMaster")
-	}
-
-	activeMaster := new(VersionMaster)
-	if err = tx.Get(activeMaster, "SELECT * FROM version_masters WHERE status=1"); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	return successResponse(c, &AdminUpdateMasterResponse{
@@ -543,8 +549,8 @@ func (h *Handler) adminUser(c echo.Context) error {
 
 	query := "SELECT * FROM users WHERE id=?"
 	user := new(User)
-	_db := h.chooseUserDB(userID)
-	if err = _db.GetContext(ctx, user, query, userID); err != nil {
+	db := h.chooseUserDB(user.ID)
+	if err = db.GetContext(ctx, user, query, userID); err != nil {
 		if err == sql.ErrNoRows {
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
@@ -553,43 +559,43 @@ func (h *Handler) adminUser(c echo.Context) error {
 
 	query = "SELECT * FROM user_devices WHERE user_id=?"
 	devices := make([]*UserDevice, 0)
-	if err = _db.SelectContext(ctx, &devices, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &devices, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	query = "SELECT * FROM user_cards WHERE user_id=?"
 	cards := make([]*UserCard, 0)
-	if err = _db.SelectContext(ctx, &cards, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &cards, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	query = "SELECT * FROM user_decks WHERE user_id=?"
 	decks := make([]*UserDeck, 0)
-	if err = _db.SelectContext(ctx, &decks, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &decks, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	query = "SELECT * FROM user_items WHERE user_id=?"
 	items := make([]*UserItem, 0)
-	if err = _db.SelectContext(ctx, &items, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &items, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	query = "SELECT * FROM user_login_bonuses WHERE user_id=?"
 	loginBonuses := make([]*UserLoginBonus, 0)
-	if err = _db.SelectContext(ctx, &loginBonuses, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &loginBonuses, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	query = "SELECT * FROM user_presents WHERE user_id=?"
 	presents := make([]*UserPresent, 0)
-	if err = _db.SelectContext(ctx, &presents, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &presents, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	query = "SELECT * FROM user_present_all_received_history WHERE user_id=?"
 	presentHistory := make([]*UserPresentAllReceivedHistory, 0)
-	if err = _db.SelectContext(ctx, &presentHistory, query, userID); err != nil {
+	if err = db.SelectContext(ctx, &presentHistory, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -633,8 +639,8 @@ func (h *Handler) adminBanUser(c echo.Context) error {
 
 	query := "SELECT * FROM users WHERE id=?"
 	user := new(User)
-	_db := h.chooseUserDB(userID)
-	if err = _db.GetContext(ctx, user, query, userID); err != nil {
+	db := h.chooseUserDB(user.ID)
+	if err = db.GetContext(ctx, user, query, userID); err != nil {
 		if err == sql.ErrNoRows {
 			return errorResponse(c, http.StatusBadRequest, ErrUserNotFound)
 		}
@@ -646,8 +652,11 @@ func (h *Handler) adminBanUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 	query = "INSERT user_bans(id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE updated_at = ?"
-	if _, err = _db.ExecContext(ctx, query, banID, userID, requestAt, requestAt, requestAt); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+
+	for _, db := range h.UserDBs {
+		if _, err = db.ExecContext(ctx, query, banID, userID, requestAt, requestAt, requestAt); err != nil {
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
 	}
 
 	return successResponse(c, &AdminBanUserResponse{
