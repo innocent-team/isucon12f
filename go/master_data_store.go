@@ -47,7 +47,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	}
 	l.GachaItemList = gachaItemList
 	for _, gachaItem := range gachaItemList {
-		l.GachaItemListByGachaID[gachaItem.ID] = append(l.GachaItemListByGachaID[gachaItem.ID], gachaItem)
+		l.GachaItemListByGachaID[gachaItem.GachaID] = append(l.GachaItemListByGachaID[gachaItem.GachaID], gachaItem)
 	}
 
 	for gachaID, gachaItems := range l.GachaItemListByGachaID {
