@@ -23,6 +23,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/nhatthm/otelsql"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"go.opentelemetry.io/otel"
 
 	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
@@ -122,6 +123,7 @@ func main() {
 	}
 
 	// e.Use(middleware.CORS())
+	e.Use(otelecho.Middleware("isuports"))
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
@@ -542,7 +544,7 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 			UpdatedAt:    requestAt,
 		}
 		query = "INSERT INTO user_present_all_received_history(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-		if _, err := tx.ExecContext(ctx, 
+		if _, err := tx.ExecContext(ctx,
 			query,
 			history.ID,
 			history.UserID,
