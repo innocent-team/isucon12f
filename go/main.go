@@ -431,7 +431,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 	}
 	bonusIDtoUserLoginBonus := make(map[int64]*UserLoginBonus)
 	for _, userLoginBonus := range userLoginBonuses {
-		userLoginBonuses[userLoginBonus.LoginBonusID] = userLoginBonus
+		bonusIDtoUserLoginBonus[userLoginBonus.LoginBonusID] = userLoginBonus
 	}
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
