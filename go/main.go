@@ -1571,7 +1571,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 	}
 	if len(obtainItemIDs) > 0 {
 		query, args, err := sqlx.In(
-			"UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=IN (?)",
+			"UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id IN (?)",
 			requestAt, requestAt, obtainItemIDs,
 		)
 		if err != nil {
