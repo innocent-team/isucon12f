@@ -142,7 +142,7 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		return nil, err
 	}
 	// デフォルトは2
-	db.SetMaxIdleConns(4)
+	db.SetMaxIdleConns(8)
 	return db, nil
 }
 
@@ -172,7 +172,7 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 			return nil, err
 		}
 		// デフォルトは2
-		db.SetMaxIdleConns(4)	
+		db.SetMaxIdleConns(8)	
 		conns = append(conns, db)
 	}
 	return conns, nil
