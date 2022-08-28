@@ -665,23 +665,22 @@ func (obtainer *ItemObtainer) commitCoins(ctx context.Context, tx *sqlx.Tx, user
 		return obtainer.obtainCoins, nil
 	}
 
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	if err := tx.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
 	var obtainAmount int64
 	for _, amount := range obtainer.obtainCoins {
 		obtainAmount += amount
 	}
 
-	query = "UPDATE users SET isu_coin=? WHERE id=?"
-	totalCoin := user.IsuCoin + obtainAmount
-	if _, err := tx.ExecContext(ctx, query, totalCoin, user.ID); err != nil {
+	query := "UPDATE users SET isu_coin=isu_coin+? WHERE id=?"
+	result, err := tx.ExecContext(ctx, query, obtainAmount, userID)
+	if err != nil {
 		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, ErrUserNotFound
 	}
 
 	return obtainer.obtainCoins, nil
