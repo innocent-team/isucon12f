@@ -724,7 +724,6 @@ func (obtainer *ItemObtainer) commitIDs(ctx context.Context, tx *sqlx.Tx, userID
 		return nil
 	}
 	query := "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id IN (?)"
-	//TODO inをいい感じにしてほしい
 	query, args, err := sqlx.In(query, requestAt, requestAt, obtainer.obtainIDs)
 	if err != nil {
 		return err
