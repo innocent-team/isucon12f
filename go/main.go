@@ -145,7 +145,14 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		"Asia%2FTokyo",
 		batch,
 	)
-	return sqlx.Open("mysql", dsn)
+	db, err := sqlx.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(2048)
+	// デフォルトは2
+	db.SetMaxIdleConns(16)
+	return db, nil
 }
 
 // ユーザーIDに応じたuser DBのコネクションを返す
@@ -173,6 +180,9 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 		if err != nil {
 			return nil, err
 		}
+		db.SetMaxOpenConns(2048)
+		// デフォルトは2
+		db.SetMaxIdleConns(16)
 		conns = append(conns, db)
 	}
 	return conns, nil
@@ -437,6 +447,21 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
+	// NOTE: 高々50件もないので全件SELECTしてしまいます
+	var loginBonusRewardMasters []*LoginBonusRewardMaster
+	err = tx.SelectContext(ctx, &loginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters")
+	if err != nil {
+		return nil, err
+	}
+	// key: `${login_bonus_id},${reward_sequence}`
+	bonusMapKey := func(bonusID int64, rewardSequence int) string {
+		return fmt.Sprintf("%d,%d", bonusID, rewardSequence)
+	}
+	bonusIDandSequenceToBonusReward := make(map[string]*LoginBonusRewardMaster)
+	for _, bonusRewardMaster := range loginBonusRewardMasters {
+		bonusIDandSequenceToBonusReward[bonusMapKey(bonusRewardMaster.LoginBonusID, bonusRewardMaster.RewardSequence)] = bonusRewardMaster
+	}
+
 	obtainer := &ItemObtainer{}
 	for _, bonus := range loginBonuses {
 		initBonus := false
@@ -476,13 +501,10 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		userBonus.UpdatedAt = requestAt
 
 		// 今回付与するリソース取得
-		rewardItem := new(LoginBonusRewardMaster)
-		query = "SELECT * FROM login_bonus_reward_masters WHERE login_bonus_id=? AND reward_sequence=?"
-		if err := tx.GetContext(ctx, rewardItem, query, bonus.ID, userBonus.LastRewardSequence); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, ErrLoginBonusRewardNotFound
-			}
-			return nil, err
+		rewardItem, ok := bonusIDandSequenceToBonusReward[bonusMapKey(bonus.ID, userBonus.LastRewardSequence)]
+		if !ok {
+			return nil, ErrLoginBonusRewardNotFound
+
 		}
 
 		err := obtainer.ObtainItem(rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount)
@@ -664,23 +686,22 @@ func (obtainer *ItemObtainer) commitCoins(ctx context.Context, tx *sqlx.Tx, user
 		return obtainer.obtainCoins, nil
 	}
 
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	if err := tx.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
 	var obtainAmount int64
 	for _, amount := range obtainer.obtainCoins {
 		obtainAmount += amount
 	}
 
-	query = "UPDATE users SET isu_coin=? WHERE id=?"
-	totalCoin := user.IsuCoin + obtainAmount
-	if _, err := tx.ExecContext(ctx, query, totalCoin, user.ID); err != nil {
+	query := "UPDATE users SET isu_coin=isu_coin+? WHERE id=?"
+	result, err := tx.ExecContext(ctx, query, obtainAmount, userID)
+	if err != nil {
 		return nil, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if affected == 0 {
+		return nil, ErrUserNotFound
 	}
 
 	return obtainer.obtainCoins, nil
@@ -1211,7 +1232,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 
 	gachaDataList, err := localGachaMasters.List(c, h, requestAt)
 	if err != nil {
-		return err
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	// genearte one time token
@@ -1355,12 +1376,14 @@ func (h *Handler) drawGacha(c echo.Context) error {
 			CreatedAt:      requestAt,
 			UpdatedAt:      requestAt,
 		}
-		query = "INSERT INTO user_presents(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-		if _, err := tx.ExecContext(ctx, query, present.ID, present.UserID, present.SentAt, present.ItemType, present.ItemID, present.Amount, present.PresentMessage, present.CreatedAt, present.UpdatedAt); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
 
 		presents = append(presents, present)
+	}
+	query = "INSERT INTO user_presents" +
+		"(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES " +
+		"(:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)"
+	if _, err := tx.NamedExecContext(ctx, query, presents); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	// isuconをへらす
@@ -1414,17 +1437,14 @@ func (h *Handler) listPresent(c echo.Context) error {
 	ORDER BY created_at DESC, id
 	LIMIT ? OFFSET ?`
 	_db := h.chooseUserDB(userID)
-	if err = _db.SelectContext(ctx, &presentList, query, userID, PresentCountPerPage, offset); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	var presentCount int
-	if err = _db.GetContext(ctx, &presentCount, "SELECT COUNT(*) FROM user_presents WHERE user_id = ? AND deleted_at IS NULL", userID); err != nil {
+	// 1件余分に取ってきてisNextの判定に使う
+	if err = _db.SelectContext(ctx, &presentList, query, userID, PresentCountPerPage+1, offset); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	isNext := false
-	if presentCount > (offset + PresentCountPerPage) {
+	if len(presentList) == PresentCountPerPage+1 {
+		presentList = presentList[:PresentCountPerPage]
 		isNext = true
 	}
 
@@ -1497,6 +1517,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 
 	// 配布処理
 	obtainer := &ItemObtainer{}
+	var obtainItemIDs []int64
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1505,11 +1526,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 		obtainPresent[i].UpdatedAt = requestAt
 		obtainPresent[i].DeletedAt = &requestAt
 		v := obtainPresent[i]
-		query = "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=?"
-		_, err := tx.ExecContext(ctx, query, requestAt, requestAt, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		obtainItemIDs = append(obtainItemIDs, v.ID)
 
 		err = obtainer.ObtainItem(v.ItemID, v.ItemType, int64(v.Amount))
 		if err != nil {
@@ -1519,6 +1536,19 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			if err == ErrInvalidItemType {
 				return errorResponse(c, http.StatusBadRequest, err)
 			}
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+	}
+	if len(obtainItemIDs) > 0 {
+		query, args, err := sqlx.In(
+			"UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id IN (?)",
+			requestAt, requestAt, obtainItemIDs,
+		)
+		if err != nil {
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		_, err = tx.ExecContext(ctx, query, args...)
+		if err != nil {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
 	}
