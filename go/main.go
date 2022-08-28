@@ -378,13 +378,6 @@ func (h *Handler) loginProcess(ctx context.Context, tx *sqlx.Tx, userID int64, r
 		return nil, nil, nil, err
 	}
 
-	if err = tx.GetContext(ctx, &user.IsuCoin, "SELECT isu_coin FROM users WHERE id=?", user.ID); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil, nil, ErrUserNotFound
-		}
-		return nil, nil, nil, err
-	}
-
 	user.UpdatedAt = requestAt
 	user.LastActivatedAt = requestAt
 
