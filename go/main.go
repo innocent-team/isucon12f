@@ -440,6 +440,21 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
+	// NOTE: 高々50件もないので全件SELECTしてしまいます
+	var loginBonusRewardMasters []*LoginBonusRewardMaster
+	err = tx.SelectContext(ctx, &loginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters")
+	if err != nil {
+		return nil, err
+	}
+	// key: `${login_bonus_id},${reward_sequence}`
+	bonusMapKey := func(bonusID int64, rewardSequence int) string {
+		return fmt.Sprintf("%d,%d", bonusID, rewardSequence)
+	}
+	bonusIDandSequenceToBonusReward := make(map[string]*LoginBonusRewardMaster)
+	for _, bonusRewardMaster := range loginBonusRewardMasters {
+		bonusIDandSequenceToBonusReward[bonusMapKey(bonusRewardMaster.LoginBonusID, bonusRewardMaster.RewardSequence)] = bonusRewardMaster
+	}
+
 	obtainer := &ItemObtainer{}
 	for _, bonus := range loginBonuses {
 		initBonus := false
@@ -479,13 +494,10 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		userBonus.UpdatedAt = requestAt
 
 		// 今回付与するリソース取得
-		rewardItem := new(LoginBonusRewardMaster)
-		query = "SELECT * FROM login_bonus_reward_masters WHERE login_bonus_id=? AND reward_sequence=?"
-		if err := tx.GetContext(ctx, rewardItem, query, bonus.ID, userBonus.LastRewardSequence); err != nil {
-			if err == sql.ErrNoRows {
-				return nil, ErrLoginBonusRewardNotFound
-			}
-			return nil, err
+		rewardItem, ok := bonusIDandSequenceToBonusReward[bonusMapKey(bonus.ID, userBonus.LastRewardSequence)]
+		if !ok {
+			return nil, ErrLoginBonusRewardNotFound
+
 		}
 
 		err := obtainer.ObtainItem(rewardItem.ItemID, rewardItem.ItemType, rewardItem.Amount)
@@ -1495,12 +1507,12 @@ func (h *Handler) listPresent(c echo.Context) error {
 	LIMIT ? OFFSET ?`
 	_db := h.chooseUserDB(userID)
 	// 1件余分に取ってきてisNextの判定に使う
-	if err = _db.SelectContext(ctx, &presentList, query, userID, PresentCountPerPage + 1, offset); err != nil {
+	if err = _db.SelectContext(ctx, &presentList, query, userID, PresentCountPerPage+1, offset); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	isNext := false
-	if len(presentList) == PresentCountPerPage + 1 {
+	if len(presentList) == PresentCountPerPage+1 {
 		presentList = presentList[:PresentCountPerPage]
 		isNext = true
 	}
