@@ -502,15 +502,11 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 
-	// 全てのアプリケーションのキャッシュ更新をフックする
-	_, err := http.Post("http://isucon1:8080/gacha/refresh", "application/x-www-form-urlencoded", nil)
+	err := hookRefreshGacha()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	_, err = http.Post("http://isucon5:8080/gacha/refresh", "application/x-www-form-urlencoded", nil)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	c.Logger().Printf("[Gacha] hooked Refresh Gacha")
 
 	return successResponse(c, &AdminUpdateMasterResponse{
 		VersionMaster: activeMaster,

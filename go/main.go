@@ -895,9 +895,13 @@ func initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	localGachaMasters.Refresh(c, &Handler{
+	err = localGachaMasters.Refresh(c, &Handler{
 		DB: dbx,
 	})
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	c.Logger().Printf("[Gacha] local init master")
 
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
@@ -2125,7 +2129,11 @@ func (h *Handler) health(c echo.Context) error {
 
 // errorResponse returns error.
 func errorResponse(c echo.Context, statusCode int, err error) error {
-	c.Logger().Errorf("status=%d, err=%+v", statusCode, errors.WithStack(err))
+	if c != nil && c.Logger() != nil {
+		c.Logger().Errorf("status=%d, err=%+v", statusCode, errors.WithStack(err))
+	} else {
+		fmt.Printf("status=%d, err=%+v", statusCode, errors.WithStack(err))
+	}
 
 	return c.JSON(statusCode, struct {
 		StatusCode int    `json:"status_code"`
