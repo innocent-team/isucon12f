@@ -137,7 +137,13 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		"Asia%2FTokyo",
 		batch,
 	)
-	return sqlx.Open("mysql", dsn)
+	db, err := sqlx.Open("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// デフォルトは2
+	db.SetMaxIdleConns(4)
+	return db, nil
 }
 
 // ユーザーIDに応じたuser DBのコネクションを返す
@@ -165,6 +171,8 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 		if err != nil {
 			return nil, err
 		}
+		// デフォルトは2
+		db.SetMaxIdleConns(4)	
 		conns = append(conns, db)
 	}
 	return conns, nil
