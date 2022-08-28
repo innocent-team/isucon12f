@@ -142,6 +142,7 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(2048)
 	// デフォルトは2
 	db.SetMaxIdleConns(16)
 	return db, nil
@@ -172,6 +173,7 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 		if err != nil {
 			return nil, err
 		}
+		db.SetMaxOpenConns(2048)
 		// デフォルトは2
 		db.SetMaxIdleConns(16)
 		conns = append(conns, db)
