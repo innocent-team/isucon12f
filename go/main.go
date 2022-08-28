@@ -452,7 +452,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 	}
 	bonusIDandSequenceToBonusReward := make(map[string]*LoginBonusRewardMaster)
 	for _, bonusRewardMaster := range loginBonusRewardMasters {
-		bonusIDandSequenceToBonusReward[bonusMapKey(bonusRewardMaster.ID, bonusRewardMaster.RewardSequence)] = bonusRewardMaster
+		bonusIDandSequenceToBonusReward[bonusMapKey(bonusRewardMaster.LoginBonusID, bonusRewardMaster.RewardSequence)] = bonusRewardMaster
 	}
 
 	obtainer := &ItemObtainer{}
