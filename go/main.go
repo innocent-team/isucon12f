@@ -1492,17 +1492,14 @@ func (h *Handler) listPresent(c echo.Context) error {
 	ORDER BY created_at DESC, id
 	LIMIT ? OFFSET ?`
 	_db := h.chooseUserDB(userID)
-	if err = _db.SelectContext(ctx, &presentList, query, userID, PresentCountPerPage, offset); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	var presentCount int
-	if err = _db.GetContext(ctx, &presentCount, "SELECT COUNT(*) FROM user_presents WHERE user_id = ? AND deleted_at IS NULL", userID); err != nil {
+	// 1件余分に取ってきてisNextの判定に使う
+	if err = _db.SelectContext(ctx, &presentList, query, userID, PresentCountPerPage + 1, offset); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	isNext := false
-	if presentCount > (offset + PresentCountPerPage) {
+	if len(presentList) == PresentCountPerPage + 1 {
+		presentList = presentList[:PresentCountPerPage]
 		isNext = true
 	}
 
