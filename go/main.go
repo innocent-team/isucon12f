@@ -719,14 +719,18 @@ func (obtainer *ItemObtainer) ObtainItem(itemID int64, itemType int, obtainAmoun
 	return nil
 }
 
-func (obtainer *ItemObtainer) commitIDs(ctx context.Context, tx *sqlx.Tx, userID int64) error {
+func (obtainer *ItemObtainer) commitIDs(ctx context.Context, tx *sqlx.Tx, userID, requestAt int64) error {
+	if len(obtainer.obtainIDs) == 0 {
+		return nil
+	}
 	query := "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id IN (?)"
 	//TODO inをいい感じにしてほしい
-	_, err := tx.In(ctx, query, requestAt, requestAt, obtainer.obtainIDs)
+	query, args, err := sqlx.In(query, requestAt, requestAt, obtainer.obtainIDs)
 	if err != nil {
 		return err
 	}
-	return nil
+	_, err = tx.ExecContext(ctx, query, args...)
+	return err
 }
 
 func (obtainer *ItemObtainer) commitCoins(ctx context.Context, tx *sqlx.Tx, userID int64) ([]int64, error) {
@@ -907,7 +911,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 
 func (obtainer *ItemObtainer) Commit(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64, commitID bool) ([]int64, []*UserCard, []*UserItem, error) {
 	if commitID {
-		err := obtainer.commitIDs(ctx, tx, userID)
+		err := obtainer.commitIDs(ctx, tx, userID, requestAt)
 		if err != nil {
 			return nil, nil, nil, err
 		}
