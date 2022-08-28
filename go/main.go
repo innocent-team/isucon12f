@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
@@ -51,6 +52,7 @@ type Handler struct {
 	AppID   int64
 	DB      *sqlx.DB
 	UserDBs []*sqlx.DB
+	Redis   *redis.Client
 }
 
 func main() {
@@ -82,12 +84,20 @@ func main() {
 		e.Logger.Fatalf("Need env WEBID=1,2...")
 	}
 
+	// connect redis
+	redis := redis.NewClient(&redis.Options{
+		Addr:     getEnv("REDIS_HOST", "localhost:6379"),
+		Password: "",
+		DB:       0,
+	})
+
 	// setting server
 	e.Server.Addr = fmt.Sprintf(":%v", "8080")
 	h := &Handler{
 		AppID:   appID,
 		DB:      dbx,
 		UserDBs: userDBs,
+		Redis:   redis,
 	}
 
 	// e.Use(middleware.CORS())
