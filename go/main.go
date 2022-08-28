@@ -173,7 +173,7 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 			return nil, err
 		}
 		// デフォルトは2
-		db.SetMaxIdleConns(16)	
+		db.SetMaxIdleConns(16)
 		conns = append(conns, db)
 	}
 	return conns, nil
@@ -1248,7 +1248,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 		if len(gachaItem) == 0 {
 			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
 		}
-		sort.Slice(gachaItem, func (i, j int) bool {
+		sort.Slice(gachaItem, func(i, j int) bool {
 			return gachaItem[i].ID < gachaItem[j].ID
 		})
 
@@ -1432,12 +1432,14 @@ func (h *Handler) drawGacha(c echo.Context) error {
 			CreatedAt:      requestAt,
 			UpdatedAt:      requestAt,
 		}
-		query = "INSERT INTO user_presents(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-		if _, err := tx.ExecContext(ctx, query, present.ID, present.UserID, present.SentAt, present.ItemType, present.ItemID, present.Amount, present.PresentMessage, present.CreatedAt, present.UpdatedAt); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
 
 		presents = append(presents, present)
+	}
+	query = "INSERT INTO user_presents" +
+		"(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES " +
+		"(:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)"
+	if _, err := tx.NamedExecContext(ctx, query, presents); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	// isuconをへらす
