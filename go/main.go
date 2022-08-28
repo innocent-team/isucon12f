@@ -1547,6 +1547,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 
 	// 配布処理
 	obtainer := &ItemObtainer{}
+	var obtainItemIDs []int64
 	for i := range obtainPresent {
 		if obtainPresent[i].DeletedAt != nil {
 			return errorResponse(c, http.StatusInternalServerError, fmt.Errorf("received present"))
@@ -1555,11 +1556,7 @@ func (h *Handler) receivePresent(c echo.Context) error {
 		obtainPresent[i].UpdatedAt = requestAt
 		obtainPresent[i].DeletedAt = &requestAt
 		v := obtainPresent[i]
-		query = "UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=?"
-		_, err := tx.ExecContext(ctx, query, requestAt, requestAt, v.ID)
-		if err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		obtainItemIDs = append(obtainItemIDs, v.ID)
 
 		err = obtainer.ObtainItem(v.ItemID, v.ItemType, int64(v.Amount))
 		if err != nil {
@@ -1569,6 +1566,19 @@ func (h *Handler) receivePresent(c echo.Context) error {
 			if err == ErrInvalidItemType {
 				return errorResponse(c, http.StatusBadRequest, err)
 			}
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+	}
+	if len(obtainItemIDs) > 0 {
+		query, args, err := sqlx.In(
+			"UPDATE user_presents SET deleted_at=?, updated_at=? WHERE id=IN (?)",
+			requestAt, requestAt, obtainItemIDs,
+		)
+		if err != nil {
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
+		_, err = tx.ExecContext(ctx, query, args...)
+		if err != nil {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
 	}
