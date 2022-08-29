@@ -419,11 +419,7 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 // obtainLoginBonus
 func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
-	loginBonuses := make([]*LoginBonusMaster, 0)
-	query := "SELECT * FROM login_bonus_masters WHERE start_at <= ? AND end_at >= ?"
-	if err := tx.SelectContext(ctx, &loginBonuses, query, requestAt, requestAt); err != nil {
-		return nil, err
-	}
+	loginBonuses := localGachaMasters.ActiveLoginBonuses(requestAt)
 
 	// ユーザーの受け取り履歴 (login_bonus_masters.id -> 受け取り情報) を構築
 	var loginBonusIDs []int64

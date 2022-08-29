@@ -19,6 +19,7 @@ var localGachaMasters = LocalGachaMasters{
 	GachaItemWeightSum:     map[int64]int64{},
 	Items:                  []*ItemMaster{},
 	ItemByID:               map[int64]*ItemMaster{},
+	LoginBonuses:           []*LoginBonusMaster{},
 }
 
 type LocalGachaMasters struct {
@@ -31,6 +32,7 @@ type LocalGachaMasters struct {
 	GachaItemWeightSum     map[int64]int64
 	Items                  []*ItemMaster
 	ItemByID               map[int64]*ItemMaster
+	LoginBonuses           []*LoginBonusMaster
 }
 
 // ガチャのマスターデータのキャッシュを更新する
@@ -93,6 +95,13 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 		itemByID[item.ID] = item
 	}
 
+	// login_bonus_masters
+	var loginBonuses []*LoginBonusMaster
+	query = "SELECT * FROM login_bonus_masters"
+	if err := h.DB.SelectContext(ctx, &loginBonuses, query); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
 	// 一括更新
 	l.Lock()
 	defer l.Unlock()
@@ -105,6 +114,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.GachaItemWeightSum = gachaItemWeightSum
 	l.Items = items
 	l.ItemByID = itemByID
+	l.LoginBonuses = loginBonuses
 
 	c.Logger().Printf("[Gacha] Updated: Version = %+v", l.VersionMaster)
 
@@ -197,6 +207,20 @@ func (l *LocalGachaMasters) ItemsByIDs(ids []int64) []*ItemMaster {
 	res := []*ItemMaster{}
 	for _, id := range ids {
 		res = append(res, l.ItemByID[id])
+	}
+	return res
+}
+
+func (l *LocalGachaMasters) ActiveLoginBonuses(requestAt int64) []*LoginBonusMaster {
+	l.RLock()
+	defer l.RUnlock()
+
+	res := []*LoginBonusMaster{}
+	for _, bonus := range l.LoginBonuses {
+		if !(bonus.StartAt <= requestAt && requestAt <= bonus.EndAt) {
+			continue
+		}
+		res = append(res, bonus)
 	}
 	return res
 }
