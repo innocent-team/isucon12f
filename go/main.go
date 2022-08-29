@@ -1781,11 +1781,23 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "UPDATE user_items SET amount=?, updated_at=? WHERE id=?"
+	// user_itemsを一括UPDATE (REPLACE)
+	type consumeRow struct {
+		ID        int64 `db:"id"`
+		Amount    int   `db:"amount"`
+		UpdatedAt int64 `db:"updated_at"`
+	}
+	var rows []*consumeRow
 	for _, v := range items {
-		if _, err = tx.ExecContext(ctx, query, v.Amount-v.ConsumeAmount, requestAt, v.ID); err != nil {
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		rows = append(rows, &consumeRow{
+			ID:        v.ID,
+			Amount:    v.Amount - v.ConsumeAmount,
+			UpdatedAt: requestAt,
+		})
+	}
+	query = "REPLACE INTO user_items (id, amount, updated_at) VALUES (:id, :amount, :updated_at)"
+	if _, err = tx.NamedExecContext(ctx, query, rows); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	// get response data
