@@ -37,9 +37,6 @@ type LocalGachaMasters struct {
 func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	c.Logger().Printf("[Gacha] Refresh Started")
 
-	l.Lock()
-	defer l.Unlock()
-
 	ctx := c.Request().Context()
 
 	query := "SELECT * FROM version_masters WHERE status=1"
@@ -54,13 +51,6 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	l.VersionMaster = masterVersion
-
-	// mapを初期化
-	l.GachaMasterByID = map[int64]*GachaMaster{}
-	l.GachaItemListByGachaID = map[int64][]*GachaItemMaster{}
-	l.GachaItemWeightSum = map[int64]int64{}
-	l.ItemByID = map[int64]*ItemMaster{}
 
 	gachaMasterList := []*GachaMaster{}
 	query = "SELECT * FROM gacha_masters ORDER BY display_order ASC"
@@ -68,11 +58,11 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	l.GachaMasters = gachaMasterList
+	gachaMasterByID := map[int64]*GachaMaster{}
 	for _, gachaMaster := range gachaMasterList {
-		l.GachaMasterByID[gachaMaster.ID] = gachaMaster
+		gachaMasterByID[gachaMaster.ID] = gachaMaster
 	}
-	c.Logger().Printf("[Gacha] gachaListAll = %d", len(l.GachaMasters))
+	c.Logger().Printf("[Gacha] gachaListAll = %d", len(gachaMasterList))
 
 	var gachaItemList []*GachaItemMaster
 	query = "SELECT * FROM gacha_item_masters ORDER BY id ASC"
@@ -80,14 +70,14 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	l.GachaItemList = gachaItemList
+	gachaItemListByGachaID := map[int64][]*GachaItemMaster{}
 	for _, gachaItem := range gachaItemList {
-		l.GachaItemListByGachaID[gachaItem.GachaID] = append(l.GachaItemListByGachaID[gachaItem.GachaID], gachaItem)
+		gachaItemListByGachaID[gachaItem.GachaID] = append(gachaItemListByGachaID[gachaItem.GachaID], gachaItem)
 	}
-
-	for gachaID, gachaItems := range l.GachaItemListByGachaID {
+	gachaItemWeightSum := map[int64]int64{}
+	for gachaID, gachaItems := range gachaItemListByGachaID {
 		for _, gachaItem := range gachaItems {
-			l.GachaItemWeightSum[gachaID] += int64(gachaItem.Weight)
+			gachaItemWeightSum[gachaID] += int64(gachaItem.Weight)
 		}
 	}
 
@@ -98,10 +88,23 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	l.Items = items
+	itemByID := map[int64]*ItemMaster{}
 	for _, item := range items {
-		l.ItemByID[item.ID] = item
+		itemByID[item.ID] = item
 	}
+
+	// 一括更新
+	l.Lock()
+	defer l.Unlock()
+
+	l.VersionMaster = masterVersion
+	l.GachaMasters = gachaMasterList
+	l.GachaMasterByID = gachaMasterByID
+	l.GachaItemList = gachaItemList
+	l.GachaItemListByGachaID = gachaItemListByGachaID
+	l.GachaItemWeightSum = gachaItemWeightSum
+	l.Items = items
+	l.ItemByID = itemByID
 
 	c.Logger().Printf("[Gacha] Updated: Version = %+v", l.VersionMaster)
 
