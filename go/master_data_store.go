@@ -17,6 +17,8 @@ var localGachaMasters = LocalGachaMasters{
 	GachaItemListByGachaID: map[int64][]*GachaItemMaster{},
 	GachaItemList:          []*GachaItemMaster{},
 	GachaItemWeightSum:     map[int64]int64{},
+	Items:                  []*ItemMaster{},
+	ItemByID:               map[int64]*ItemMaster{},
 }
 
 type LocalGachaMasters struct {
@@ -27,10 +29,14 @@ type LocalGachaMasters struct {
 	GachaItemListByGachaID map[int64][]*GachaItemMaster
 	GachaItemList          []*GachaItemMaster
 	GachaItemWeightSum     map[int64]int64
+	Items                  []*ItemMaster
+	ItemByID               map[int64]*ItemMaster
 }
 
 // ガチャのマスターデータのキャッシュを更新する
 func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
+	c.Logger().Printf("[Gacha] Refresh Started")
+
 	l.Lock()
 	defer l.Unlock()
 
@@ -54,6 +60,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.GachaMasterByID = map[int64]*GachaMaster{}
 	l.GachaItemListByGachaID = map[int64][]*GachaItemMaster{}
 	l.GachaItemWeightSum = map[int64]int64{}
+	l.ItemByID = map[int64]*ItemMaster{}
 
 	gachaMasterList := []*GachaMaster{}
 	query = "SELECT * FROM gacha_masters ORDER BY display_order ASC"
@@ -82,6 +89,18 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 		for _, gachaItem := range gachaItems {
 			l.GachaItemWeightSum[gachaID] += int64(gachaItem.Weight)
 		}
+	}
+
+	// item_masters
+	var items []*ItemMaster
+	query = "SELECT * FROM item_masters ORDER BY id ASC"
+	err = h.DB.SelectContext(ctx, &items, query)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	l.Items = items
+	for _, item := range items {
+		l.ItemByID[item.ID] = item
 	}
 
 	c.Logger().Printf("[Gacha] Updated: Version = %+v", l.VersionMaster)
@@ -166,6 +185,17 @@ func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gach
 		}
 	}
 	return gachaInfo.Name, result, nil
+}
+
+func (l *LocalGachaMasters) ItemsByIDs(ids []int64) []*ItemMaster {
+	l.RLock()
+	defer l.RUnlock()
+
+	res := []*ItemMaster{}
+	for _, id := range ids {
+		res = append(res, l.ItemByID[id])
+	}
+	return res
 }
 
 // POST /gacha/refresh

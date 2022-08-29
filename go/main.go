@@ -708,16 +708,7 @@ func (obtainer *ItemObtainer) commitCards(ctx context.Context, h *Handler, tx *s
 		return []*UserCard{}, nil
 	}
 
-	query, args, err := sqlx.In("SELECT * FROM item_masters WHERE id IN (?)", obtainer.obtainCards)
-	if err != nil {
-		return nil, err
-	}
-
-	var itemMasters []*ItemMaster
-	err = tx.SelectContext(ctx, &itemMasters, query, args...)
-	if err != nil {
-		return nil, err
-	}
+	itemMasters := localGachaMasters.ItemsByIDs(obtainer.obtainCards)
 
 	var obtainCards []*UserCard
 
@@ -745,7 +736,7 @@ func (obtainer *ItemObtainer) commitCards(ctx context.Context, h *Handler, tx *s
 		obtainCards = append(obtainCards, card)
 	}
 
-	query = "INSERT INTO user_cards" +
+	query := "INSERT INTO user_cards" +
 		"(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES " +
 		"(:id, :user_id, :card_id, :amount_per_sec, :level, :total_exp, :created_at, :updated_at)"
 	if _, err := tx.NamedExecContext(ctx, query, obtainCards); err != nil {
@@ -764,16 +755,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	for _, item := range obtainer.obtainItems {
 		itemIDs = append(itemIDs, item.itemID)
 	}
-	query, args, err := sqlx.In("SELECT * FROM item_masters WHERE id IN (?)", itemIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	var itemMasters []*ItemMaster
-	err = tx.SelectContext(ctx, &itemMasters, query, args...)
-	if err != nil {
-		return nil, err
-	}
+	itemMasters := localGachaMasters.ItemsByIDs(itemIDs)
 
 	itemIDtoMaster := make(map[int64]*ItemMaster)
 	for _, item := range itemMasters {
@@ -788,7 +770,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 
 	// 持っているアイテムのリストと item_id -> user_item のマッピングを作っておく
 	var havingItems []*UserItem
-	query, args, err = sqlx.In("SELECT * FROM user_items WHERE user_id = ? AND item_id IN (?)", userID, itemIDs)
+	query, args, err := sqlx.In("SELECT * FROM user_items WHERE user_id = ? AND item_id IN (?)", userID, itemIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -969,14 +951,7 @@ func (h *Handler) createUser(c echo.Context) error {
 	}
 
 	// 初期デッキ付与
-	initCard := new(ItemMaster)
-	query = "SELECT * FROM item_masters WHERE id=?"
-	if err = tx.GetContext(ctx, initCard, query, 2); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrItemNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	initCard := localGachaMasters.ItemsByIDs([]int64{2})[0]
 
 	initCards := make([]*UserCard, 0, 3)
 	for i := 0; i < 3; i++ {
