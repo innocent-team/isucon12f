@@ -46,17 +46,18 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	ctx := c.Request().Context()
 
 	query := "SELECT * FROM version_masters WHERE status=1"
-	masterVersion := new(VersionMaster)
-	_db := h.DB
-	if err := _db.GetContext(ctx, masterVersion, query); err != nil {
+	var masterVersion VersionMaster
+	if err := h.DB.GetContext(ctx, &masterVersion, query); err != nil {
 		if err == sql.ErrNoRows {
 			//return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
 			// DBのInitializeにミスってたときは、とりあえず諦める。
-			fmt.Printf("[Gacha] Skip Refresh. version_masters is missing\n")
+			c.Logger().Errorf("[Gacha] Skip Refresh. version_masters is missing\n")
 			return nil
 		}
-		return errorResponse(c, http.StatusInternalServerError, err)
+		c.Logger().Errorf("[Gacha] Skip Refresh. version_masters error %v\n", err)
+		return nil
 	}
+	c.Logger().Printf("[Gacha] Version found")
 
 	gachaMasterList := []*GachaMaster{}
 	query = "SELECT * FROM gacha_masters ORDER BY display_order ASC"
@@ -124,7 +125,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.Lock()
 	defer l.Unlock()
 
-	l.VersionMaster = masterVersion
+	l.VersionMaster = &masterVersion
 	l.GachaMasters = gachaMasterList
 	l.GachaMasterByID = gachaMasterByID
 	l.GachaItemList = gachaItemList
@@ -139,6 +140,12 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	c.Logger().Printf("[Gacha] Updated: Version = %+v", l.VersionMaster)
 
 	return nil
+}
+
+func (l *LocalGachaMasters) GetVersionMaster() *VersionMaster {
+	l.RLock()
+	defer l.RUnlock()
+	return l.VersionMaster
 }
 
 func (l *LocalGachaMasters) List(c echo.Context, h *Handler, requestAt int64) ([]*GachaData, error) {

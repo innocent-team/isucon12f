@@ -223,15 +223,9 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
-		masterVersion := new(VersionMaster)
-		_db := h.DB
-		if err := _db.GetContext(ctx, masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		masterVersion := localGachaMasters.GetVersionMaster()
+
+		c.Logger().Printf("master: %d / user: %v", masterVersion.MasterVersion, c.Request().Header.Get("x-master-version"))
 
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
 			return errorResponse(c, http.StatusUnprocessableEntity, ErrInvalidMasterVersion)
@@ -527,14 +521,6 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 // obtainPresent プレゼント付与処理
 func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserPresent, error) {
 	normalPresents := localGachaMasters.ActivePresentAll(requestAt)
-
-	_normalPresents := make([]*PresentAllMaster, 0)
-	query := "SELECT * FROM present_all_masters WHERE registered_start_at <= ? AND registered_end_at >= ?"
-	if err := tx.SelectContext(ctx, &_normalPresents, query, requestAt, requestAt); err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("[Gacha] %d / %d", len(normalPresents), len(_normalPresents))
 
 	// ユーザーの受け取り履歴を構築する
 	var normalPresentIDs []int64
@@ -864,9 +850,7 @@ func (h *Handler) initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	err = localGachaMasters.Refresh(c, &Handler{
-		DB: dbx,
-	})
+	err = hookRefreshGacha()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
