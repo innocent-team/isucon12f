@@ -67,6 +67,13 @@ if [[ "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 3 || "$INSTANCE_NUM" == 4 ]]; t
   sudo systemctl enable --now mysql
 fi
 
+# Redis
+if [[ "$INSTANCE_NUM" == 5 ]]; then
+  sudo install -o root -g root -m 644 ./conf/etc/redis/redis.conf /etc/redis/redis.conf
+  sudo systemctl restart redis
+  sudo systemctl enable --now redis-server
+fi
+
 if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
   sudo systemctl disable --now mysql.service
 fi
