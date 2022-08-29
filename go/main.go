@@ -781,7 +781,6 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	}
 
 	// 初めて取得したアイテムはINSERT、持っているアイテムは所持数をUPDATEする
-	// TODO: primary keyを解きほぐしたらUPSERTにできるかも？
 
 	// 持っているアイテムのリストと item_id -> user_item のマッピングを作っておく
 	var havingItems []*UserItem
@@ -822,27 +821,18 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	}
 
 	var obtainItems []*UserItem
+	obtainItems = append(obtainItems, firstObtainedItems...)
+	obtainItems = append(obtainItems, havingItems...)
 
-	// 初めて取得したアイテムについてINSERT
-	if len(firstObtainedItems) > 0 {
+	if len(obtainItems) > 0 {
 		if _, err := tx.NamedExecContext(
 			ctx,
-			"INSERT INTO user_items"+
+			"REPLACE INTO user_items"+
 				"(id, user_id, item_id, item_type, amount, created_at, updated_at) VALUES "+
 				"(:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)",
-			firstObtainedItems); err != nil {
+				obtainItems); err != nil {
 			return nil, err
 		}
-	}
-	obtainItems = append(obtainItems, firstObtainedItems...)
-
-	// 持っているアイテムについてUPDATE
-	for _, uitem := range havingItems {
-		query = "UPDATE user_items SET amount=?, updated_at=? WHERE id=?"
-		if _, err := tx.ExecContext(ctx, query, uitem.Amount, uitem.UpdatedAt, uitem.ID); err != nil {
-			return nil, err
-		}
-		obtainItems = append(obtainItems, uitem)
 	}
 
 	return obtainItems, nil
