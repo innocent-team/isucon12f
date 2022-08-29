@@ -502,6 +502,12 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 
+	err := hookRefreshGacha()
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	c.Logger().Printf("[Gacha] hooked Refresh Gacha")
+
 	return successResponse(c, &AdminUpdateMasterResponse{
 		VersionMaster: activeMaster,
 	})

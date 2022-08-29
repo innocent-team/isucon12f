@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -97,6 +96,7 @@ func main() {
 	// utility
 	e.POST("/initialize", initialize)
 	e.GET("/health", h.health)
+	e.POST("/gacha/refresh", h.refreshGacha)
 
 	// feature
 	API := e.Group("", h.apiMiddleware)
@@ -122,6 +122,13 @@ func main() {
 	adminAuthAPI.PUT("/admin/master", h.adminUpdateMaster)
 	adminAuthAPI.GET("/admin/user/:userID", h.adminUser)
 	adminAuthAPI.POST("/admin/user/:userID/ban", h.adminBanUser)
+
+	// ガチャのマスターデータのキャッシュを更新
+	dummyReq, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		e.Logger.Fatalf("failed to initialize master cache: %v", err)
+	}
+	localGachaMasters.Refresh(e.NewContext(dummyReq, nil), h)
 
 	e.Logger.Infof("Start server: address=%s", e.Server.Addr)
 	e.Logger.Error(e.StartServer(e.Server))
@@ -888,6 +895,14 @@ func initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	err = localGachaMasters.Refresh(c, &Handler{
+		DB: dbx,
+	})
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	c.Logger().Printf("[Gacha] local init master")
+
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
 	})
@@ -1219,60 +1234,14 @@ func (h *Handler) listGacha(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	gachaMasterList := []*GachaMaster{}
-	query := "SELECT * FROM gacha_masters WHERE start_at <= ? AND end_at >= ? ORDER BY display_order ASC"
-	_db := h.chooseUserDB(userID)
-	err = _db.SelectContext(ctx, &gachaMasterList, query, requestAt, requestAt)
+	gachaDataList, err := localGachaMasters.List(c, h, requestAt)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	if len(gachaMasterList) == 0 {
-		return successResponse(c, &ListGachaResponse{
-			Gachas: []*GachaData{},
-		})
-	}
-
-	var gachaIDs []int64
-	for _, gachaMaster := range gachaMasterList {
-		gachaIDs = append(gachaIDs, gachaMaster.ID)
-	}
-	query, args, err := sqlx.In("SELECT * FROM gacha_item_masters WHERE gacha_id IN (?) ORDER BY id ASC", gachaIDs)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	var gachaItems []*GachaItemMaster
-	err = _db.SelectContext(ctx, &gachaItems, query, args...)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	gachaItemsByGachaID := make(map[int64][]*GachaItemMaster)
-	for _, gachaItem := range gachaItems {
-		gachaItemsByGachaID[gachaItem.GachaID] = append(gachaItemsByGachaID[gachaItem.GachaID], gachaItem)
-	}
-
-	// ガチャ排出アイテム取得
-	gachaDataList := make([]*GachaData, 0)
-	for _, v := range gachaMasterList {
-		gachaItem, ok := gachaItemsByGachaID[v.ID]
-		if !ok {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
-		}
-		if len(gachaItem) == 0 {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
-		}
-		sort.Slice(gachaItem, func(i, j int) bool {
-			return gachaItem[i].ID < gachaItem[j].ID
-		})
-
-		gachaDataList = append(gachaDataList, &GachaData{
-			Gacha:     v,
-			GachaItem: gachaItem,
-		})
 	}
 
 	// genearte one time token
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
+	query := "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
+	_db := h.chooseUserDB(userID)
 	if _, err = _db.ExecContext(ctx, query, requestAt, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1377,48 +1346,14 @@ func (h *Handler) drawGacha(c echo.Context) error {
 		return errorResponse(c, http.StatusConflict, fmt.Errorf("not enough isucon"))
 	}
 
-	// gachaIDからガチャマスタの取得
-	query = "SELECT * FROM gacha_masters WHERE id=? AND start_at <= ? AND end_at >= ?"
-	gachaInfo := new(GachaMaster)
-	if err = _db.GetContext(ctx, gachaInfo, query, gachaID, requestAt, requestAt); err != nil {
-		if sql.ErrNoRows == err {
-			return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
-	// gachaItemMasterからアイテムリスト取得
-	gachaItemList := make([]*GachaItemMaster, 0)
-	err = _db.SelectContext(ctx, &gachaItemList, "SELECT * FROM gacha_item_masters WHERE gacha_id=? ORDER BY id ASC", gachaID)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	if len(gachaItemList) == 0 {
-		return errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
-	}
-
-	// weightの合計値を算出
-	var sum int64
-	err = _db.GetContext(ctx, &sum, "SELECT SUM(weight) FROM gacha_item_masters WHERE gacha_id=?", gachaID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, err)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-
 	// random値の導出 & 抽選
-	result := make([]*GachaItemMaster, 0, gachaCount)
-	for i := 0; i < int(gachaCount); i++ {
-		random := rand.Int63n(sum)
-		boundary := 0
-		for _, v := range gachaItemList {
-			boundary += v.Weight
-			if random < int64(boundary) {
-				result = append(result, v)
-				break
-			}
-		}
+	gachaIDint, err := strconv.ParseInt(gachaID, 10, 64)
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	gachaName, result, err := localGachaMasters.Pick(c, h, gachaIDint, gachaCount, requestAt)
+	if err != nil {
+		return err
 	}
 
 	tx, err := _db.Beginx()
@@ -1441,7 +1376,7 @@ func (h *Handler) drawGacha(c echo.Context) error {
 			ItemType:       v.ItemType,
 			ItemID:         v.ItemID,
 			Amount:         v.Amount,
-			PresentMessage: fmt.Sprintf("%sの付与アイテムです", gachaInfo.Name),
+			PresentMessage: fmt.Sprintf("%sの付与アイテムです", gachaName),
 			CreatedAt:      requestAt,
 			UpdatedAt:      requestAt,
 		}
@@ -2194,7 +2129,11 @@ func (h *Handler) health(c echo.Context) error {
 
 // errorResponse returns error.
 func errorResponse(c echo.Context, statusCode int, err error) error {
-	c.Logger().Errorf("status=%d, err=%+v", statusCode, errors.WithStack(err))
+	if c != nil && c.Logger() != nil {
+		c.Logger().Errorf("status=%d, err=%+v", statusCode, errors.WithStack(err))
+	} else {
+		fmt.Printf("status=%d, err=%+v", statusCode, errors.WithStack(err))
+	}
 
 	return c.JSON(statusCode, struct {
 		StatusCode int    `json:"status_code"`
