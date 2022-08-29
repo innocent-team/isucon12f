@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 
@@ -17,8 +18,7 @@ import (
 // admin
 
 func (h *Handler) adminDB() *sqlx.DB {
-	// 1番目に決め打ち
-	return h.UserDBs[0]
+	return h.UserDBs[rand.Intn(3)]
 }
 
 // adminSessionCheckMiddleware
