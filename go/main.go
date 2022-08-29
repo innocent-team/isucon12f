@@ -1634,7 +1634,7 @@ func (h *Handler) listItem(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	err = h.Redis.Set(ctx, userOneTimeTokenKey(userID, tk), formatUserOneTimeTokenValue(1, requestAt+600), 0).Err()
+	err = h.Redis.Set(ctx, userOneTimeTokenKey(userID, tk), formatUserOneTimeTokenValue(2, requestAt+600), 0).Err()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
