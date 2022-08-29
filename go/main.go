@@ -464,13 +464,10 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	obtainer := &ItemObtainer{}
 	for _, bonus := range loginBonuses {
-		initBonus := false
 		// ボーナスの進捗取得
 		userBonus, hasBonusRow := bonusIDtoUserLoginBonus[bonus.ID]
 		if !hasBonusRow {
 			// 初めてログインボーナスを受け取る
-			initBonus = true
-
 			ubID, err := h.generateID(ctx)
 			if err != nil {
 				return nil, err
@@ -512,20 +509,15 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 			return nil, err
 		}
 
-		// 進捗の保存
-		if initBonus {
-			query = "INSERT INTO user_login_bonuses(id, user_id, login_bonus_id, last_reward_sequence, loop_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-			if _, err = tx.ExecContext(ctx, query, userBonus.ID, userBonus.UserID, userBonus.LoginBonusID, userBonus.LastRewardSequence, userBonus.LoopCount, userBonus.CreatedAt, userBonus.UpdatedAt); err != nil {
-				return nil, err
-			}
-		} else {
-			query = "UPDATE user_login_bonuses SET last_reward_sequence=?, loop_count=?, updated_at=? WHERE id=?"
-			if _, err = tx.ExecContext(ctx, query, userBonus.LastRewardSequence, userBonus.LoopCount, userBonus.UpdatedAt, userBonus.ID); err != nil {
-				return nil, err
-			}
-		}
-
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
+	}
+
+	// 進捗の保存
+	query = "REPLACE INTO user_login_bonuses " +
+		"(id, user_id, login_bonus_id, last_reward_sequence, loop_count, created_at, updated_at) VALUES " +
+		"(:id, :user_id, :login_bonus_id, :last_reward_sequence, :loop_count, :created_at, :updated_at)"
+	if _, err := tx.NamedExecContext(ctx, query, sendLoginBonuses); err != nil {
+		return nil, err
 	}
 
 	_, _, _, err = obtainer.Commit(ctx, h, tx, userID, requestAt)
