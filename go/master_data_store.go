@@ -20,6 +20,7 @@ var localGachaMasters = LocalGachaMasters{
 	Items:                  []*ItemMaster{},
 	ItemByID:               map[int64]*ItemMaster{},
 	LoginBonuses:           []*LoginBonusMaster{},
+	LoginBonusRewards:      []*LoginBonusRewardMaster{},
 }
 
 type LocalGachaMasters struct {
@@ -33,6 +34,7 @@ type LocalGachaMasters struct {
 	Items                  []*ItemMaster
 	ItemByID               map[int64]*ItemMaster
 	LoginBonuses           []*LoginBonusMaster
+	LoginBonusRewards      []*LoginBonusRewardMaster
 }
 
 // ガチャのマスターデータのキャッシュを更新する
@@ -102,6 +104,13 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	// login_bonus_reward_masters
+	var loginBonusRewardMasters []*LoginBonusRewardMaster
+	err = h.DB.SelectContext(ctx, &loginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters")
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+
 	// 一括更新
 	l.Lock()
 	defer l.Unlock()
@@ -115,6 +124,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.Items = items
 	l.ItemByID = itemByID
 	l.LoginBonuses = loginBonuses
+	l.LoginBonusRewards = loginBonusRewardMasters
 
 	c.Logger().Printf("[Gacha] Updated: Version = %+v", l.VersionMaster)
 
@@ -223,6 +233,12 @@ func (l *LocalGachaMasters) ActiveLoginBonuses(requestAt int64) []*LoginBonusMas
 		res = append(res, bonus)
 	}
 	return res
+}
+
+func (l *LocalGachaMasters) AllLoginBonusRewards() []*LoginBonusRewardMaster {
+	l.RLock()
+	defer l.RUnlock()
+	return l.LoginBonusRewards
 }
 
 // POST /gacha/refresh

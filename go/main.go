@@ -447,12 +447,8 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
-	// NOTE: 高々50件もないので全件SELECTしてしまいます
-	var loginBonusRewardMasters []*LoginBonusRewardMaster
-	err = tx.SelectContext(ctx, &loginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters")
-	if err != nil {
-		return nil, err
-	}
+	loginBonusRewardMasters := localGachaMasters.AllLoginBonusRewards()
+
 	// key: `${login_bonus_id},${reward_sequence}`
 	bonusMapKey := func(bonusID int64, rewardSequence int) string {
 		return fmt.Sprintf("%d,%d", bonusID, rewardSequence)
