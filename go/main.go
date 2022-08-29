@@ -309,28 +309,22 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 
 // checkOneTimeToken
 func (h *Handler) checkOneTimeToken(ctx context.Context, userID int64, token string, tokenType int, requestAt int64) error {
-	tk := new(UserOneTimeToken)
-	query := "SELECT * FROM user_one_time_tokens WHERE token=? AND token_type=? AND deleted_at IS NULL"
-	_db := h.chooseUserDB(userID)
-	if err := _db.GetContext(ctx, tk, query, token, tokenType); err != nil {
-		if err == sql.ErrNoRows {
+	val, err := h.Redis.GetDel(ctx, userOneTimeTokenKey(userID, token)).Result()
+	if err != nil {
+		if err == redis.Nil {
 			return ErrInvalidToken
 		}
 		return err
 	}
-
-	if tk.ExpiredAt < requestAt {
-		query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE token=?"
-		if _, err := _db.ExecContext(ctx, query, requestAt, token); err != nil {
-			return err
-		}
+	embedTokenType, expiredAt := parseUserOneTimeTokenValue(val)
+	if embedTokenType == -1 && expiredAt == -1 {
 		return ErrInvalidToken
 	}
-
-	// 使ったトークンを失効する
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE token=?"
-	if _, err := _db.ExecContext(ctx, query, requestAt, token); err != nil {
-		return err
+	if embedTokenType != tokenType {
+		return ErrInvalidToken
+	}
+	if expiredAt < requestAt {
+		return ErrInvalidToken
 	}
 
 	return nil
@@ -840,7 +834,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 			"REPLACE INTO user_items"+
 				"(id, user_id, item_id, item_type, amount, created_at, updated_at) VALUES "+
 				"(:id, :user_id, :item_id, :item_type, :amount, :created_at, :updated_at)",
-				obtainItems); err != nil {
+			obtainItems); err != nil {
 			return nil, err
 		}
 	}
@@ -1212,6 +1206,35 @@ type LoginResponse struct {
 	UpdatedResources *UpdatedResource `json:"updatedResources"`
 }
 
+func allUserOneTimeTokenKey(userID int64) string {
+	return fmt.Sprintf("user_one_time_token:%d:*", userID)
+}
+
+func userOneTimeTokenKey(userID int64, token string) string {
+	return fmt.Sprintf("user_one_time_token:%d:%s", userID, token)
+}
+
+// [tokenType]:[expiredAt]
+func formatUserOneTimeTokenValue(tokenType int, expiredAt int64) string {
+	return fmt.Sprintf("%d:%d", tokenType, expiredAt)
+}
+
+func parseUserOneTimeTokenValue(tokenValue string) (int, int64) {
+	xs := strings.Split(tokenValue, ":")
+	if len(xs) != 2 {
+		return -1, -1
+	}
+	tokenType, err := strconv.ParseInt(xs[0], 10, 64)
+	if err != nil {
+		return -1, -1
+	}
+	expiredAt, err := strconv.ParseInt(xs[1], 10, 64)
+	if err != nil {
+		return -1, -1
+	}
+	return int(tokenType), expiredAt
+}
+
 // listGacha ガチャ一覧
 // GET /user/{userID}/gacha/index
 func (h *Handler) listGacha(c echo.Context) error {
@@ -1232,12 +1255,7 @@ func (h *Handler) listGacha(c echo.Context) error {
 	}
 
 	// genearte one time token
-	query := "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	_db := h.chooseUserDB(userID)
-	if _, err = _db.ExecContext(ctx, query, requestAt, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	tID, err := h.generateID(ctx)
+	err = h.Redis.Del(ctx, allUserOneTimeTokenKey(userID)).Err()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1245,22 +1263,13 @@ func (h *Handler) listGacha(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	token := &UserOneTimeToken{
-		ID:        tID,
-		UserID:    userID,
-		Token:     tk,
-		TokenType: 1,
-		CreatedAt: requestAt,
-		UpdatedAt: requestAt,
-		ExpiredAt: requestAt + 600,
-	}
-	query = "INSERT INTO user_one_time_tokens(id, user_id, token, token_type, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-	if _, err = _db.ExecContext(ctx, query, token.ID, token.UserID, token.Token, token.TokenType, token.CreatedAt, token.UpdatedAt, token.ExpiredAt); err != nil {
+	err = h.Redis.Set(ctx, userOneTimeTokenKey(userID, tk), formatUserOneTimeTokenValue(1, requestAt+600), 0).Err()
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	return successResponse(c, &ListGachaResponse{
-		OneTimeToken: token.Token,
+		OneTimeToken: tk,
 		Gachas:       gachaDataList,
 	})
 }
@@ -1617,11 +1626,7 @@ func (h *Handler) listItem(c echo.Context) error {
 	}
 
 	// genearte one time token
-	query = "UPDATE user_one_time_tokens SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = _db.ExecContext(ctx, query, requestAt, userID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	tID, err := h.generateID(ctx)
+	err = h.Redis.Del(ctx, allUserOneTimeTokenKey(userID)).Err()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -1629,22 +1634,13 @@ func (h *Handler) listItem(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	token := &UserOneTimeToken{
-		ID:        tID,
-		UserID:    userID,
-		Token:     tk,
-		TokenType: 2,
-		CreatedAt: requestAt,
-		UpdatedAt: requestAt,
-		ExpiredAt: requestAt + 600,
-	}
-	query = "INSERT INTO user_one_time_tokens(id, user_id, token, token_type, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-	if _, err = _db.ExecContext(ctx, query, token.ID, token.UserID, token.Token, token.TokenType, token.CreatedAt, token.UpdatedAt, token.ExpiredAt); err != nil {
+	err = h.Redis.Set(ctx, userOneTimeTokenKey(userID, tk), formatUserOneTimeTokenValue(1, requestAt+600), 0).Err()
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	return successResponse(c, &ListItemResponse{
-		OneTimeToken: token.Token,
+		OneTimeToken: tk,
 		Items:        itemList,
 		User:         user,
 		Cards:        cardList,
