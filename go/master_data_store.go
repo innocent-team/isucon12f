@@ -11,22 +11,30 @@ import (
 )
 
 var localGachaMasters = LocalGachaMasters{
-	VersionMaster:          &VersionMaster{},
-	GachaMasterByID:        map[int64]*GachaMaster{},
-	GachaMasters:           []*GachaMaster{},
-	GachaItemListByGachaID: map[int64][]*GachaItemMaster{},
-	GachaItemList:          []*GachaItemMaster{},
-	GachaItemWeightSum:     map[int64]int64{},
+	VersionMaster:           &VersionMaster{},
+	GachaMasterByID:         map[int64]*GachaMaster{},
+	GachaMasters:            []*GachaMaster{},
+	GachaItemListByGachaID:  map[int64][]*GachaItemMaster{},
+	GachaItemList:           []*GachaItemMaster{},
+	GachaItemWeightSum:      map[int64]int64{},
+	loginBonusRewardMasters: []*LoginBonusRewardMaster{},
 }
 
 type LocalGachaMasters struct {
 	sync.RWMutex
-	VersionMaster          *VersionMaster
-	GachaMasterByID        map[int64]*GachaMaster
-	GachaMasters           []*GachaMaster
-	GachaItemListByGachaID map[int64][]*GachaItemMaster
-	GachaItemList          []*GachaItemMaster
-	GachaItemWeightSum     map[int64]int64
+	VersionMaster           *VersionMaster
+	GachaMasterByID         map[int64]*GachaMaster
+	GachaMasters            []*GachaMaster
+	GachaItemListByGachaID  map[int64][]*GachaItemMaster
+	GachaItemList           []*GachaItemMaster
+	GachaItemWeightSum      map[int64]int64
+	loginBonusRewardMasters []*LoginBonusRewardMaster
+}
+
+func (l *LocalGachaMasters) ListLoginBonusRewardMasters() []*LoginBonusRewardMaster {
+	l.RLock()
+	defer l.RUnlock()
+	return l.loginBonusRewardMasters
 }
 
 // ガチャのマスターデータのキャッシュを更新する
@@ -49,6 +57,10 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 	l.VersionMaster = masterVersion
+
+	if err := _db.SelectContext(ctx, &l.loginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
 
 	// mapを初期化
 	l.GachaMasterByID = map[int64]*GachaMaster{}
