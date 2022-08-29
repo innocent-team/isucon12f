@@ -526,11 +526,15 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 // obtainPresent プレゼント付与処理
 func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserPresent, error) {
-	normalPresents := make([]*PresentAllMaster, 0)
+	normalPresents := localGachaMasters.ActivePresentAll(requestAt)
+
+	_normalPresents := make([]*PresentAllMaster, 0)
 	query := "SELECT * FROM present_all_masters WHERE registered_start_at <= ? AND registered_end_at >= ?"
-	if err := tx.SelectContext(ctx, &normalPresents, query, requestAt, requestAt); err != nil {
+	if err := tx.SelectContext(ctx, &_normalPresents, query, requestAt, requestAt); err != nil {
 		return nil, err
 	}
+
+	fmt.Printf("[Gacha] %d / %d", len(normalPresents), len(_normalPresents))
 
 	// ユーザーの受け取り履歴を構築する
 	var normalPresentIDs []int64
