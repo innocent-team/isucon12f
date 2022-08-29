@@ -104,7 +104,7 @@ func main() {
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{}))
 
 	// utility
-	e.POST("/initialize", initialize)
+	e.POST("/initialize", h.initialize)
 	e.GET("/health", h.health)
 	e.POST("/gacha/refresh", h.refreshGacha)
 
@@ -861,7 +861,8 @@ func (obtainer *ItemObtainer) Commit(ctx context.Context, h *Handler, tx *sqlx.T
 
 // initialize 初期化処理
 // POST /initialize
-func initialize(c echo.Context) error {
+func (h *Handler) initialize(c echo.Context) error {
+	ctx := c.Request().Context()
 	dbx, err := connectDB(true)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -873,6 +874,10 @@ func initialize(c echo.Context) error {
 	}
 	for _, userDB := range userDBs {
 		defer userDB.Close()
+	}
+	err = h.Redis.FlushAll(ctx).Err()
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
