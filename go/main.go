@@ -260,6 +260,8 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 		}
 
+		c.Logger().Printf("session: %s", sessID)
+
 		userID, err := getUserID(c)
 		if err != nil {
 			return errorResponse(c, http.StatusBadRequest, err)
@@ -839,9 +841,18 @@ func (h *Handler) initialize(c echo.Context) error {
 	for _, userDB := range userDBs {
 		defer userDB.Close()
 	}
-	err = h.Redis.FlushAll(ctx).Err()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+
+	redisHosts := []string{"isucon1:6379", "isucon5:6379"}
+	for _, host := range redisHosts {
+		r := redis.NewClient(&redis.Options{
+			Addr:     host,
+			Password: "",
+			DB:       0,
+		})
+		err = r.FlushAll(ctx).Err()
+		if err != nil {
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
 	}
 
 	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
