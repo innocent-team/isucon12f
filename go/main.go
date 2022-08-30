@@ -457,6 +457,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 	for _, bonus := range loginBonuses {
 		// ボーナスの進捗取得
 		userBonus, hasBonusRow := bonusIDtoUserLoginBonus[bonus.ID]
+		fmt.Fprintf(os.Stderr, "[Bonus] %v\n", bonus)
 		if !hasBonusRow {
 			// 初めてログインボーナスを受け取る
 			ubID, err := h.generateID(ctx)
@@ -500,6 +501,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 			return nil, err
 		}
 
+		fmt.Fprintf(os.Stderr, "[Bonus] give %v\n", userBonus)
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
 	}
 
@@ -1315,8 +1317,9 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 	gachaName, result, err := localGachaMasters.Pick(c, h, gachaIDint, gachaCount, requestAt)
 	if err != nil {
-		return err
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	c.Logger().Printf("[Gacha] ID%d/%d %s %+v %v", gachaIDint, gachaCount, gachaName, result, err)
 
 	tx, err := _db.Beginx()
 	if err != nil {
@@ -1658,9 +1661,8 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	// get target card
 	card := new(TargetUserCardData)
 	query := `
-	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp, im.amount_per_sec as 'base_amount_per_sec', im.max_level , im.max_amount_per_sec , im.base_exp_per_level
+	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp
 	FROM user_cards as uc
-	INNER JOIN item_masters as im ON uc.card_id = im.id
 	WHERE uc.id = ? AND uc.user_id=?
 	`
 	_db := h.chooseUserDB(userID)
@@ -1670,6 +1672,11 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	err = localGachaMasters.JoinUserCardData(card)
+	if err != nil {
+		return errorResponse(c, http.StatusNotFound, err)
+	}
+	c.Logger().Printf("card: %+v", card)
 
 	if card.Level == card.MaxLevel {
 		return errorResponse(c, http.StatusBadRequest, fmt.Errorf("target card is max level"))
@@ -1678,11 +1685,11 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	// 消費アイテムの所持チェック
 	items := make([]*ConsumeUserItemData, 0)
 	query = `
-	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at, im.gained_exp
+	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at
 	FROM user_items as ui
-	INNER JOIN item_masters as im ON ui.item_id = im.id
 	WHERE ui.item_type = 3 AND ui.id=? AND ui.user_id=?
 	`
+
 	for _, v := range req.Items {
 		item := new(ConsumeUserItemData)
 		if err = _db.GetContext(ctx, item, query, v.ID, userID); err != nil {
@@ -1694,6 +1701,10 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 
 		if v.Amount > item.Amount {
 			return errorResponse(c, http.StatusBadRequest, fmt.Errorf("item not enough"))
+		}
+		err = localGachaMasters.JoinConsumerUserItemData(item)
+		if err != nil {
+			return errorResponse(c, http.StatusNotFound, err)
 		}
 		item.ConsumeAmount = v.Amount
 		items = append(items, item)

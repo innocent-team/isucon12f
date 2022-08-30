@@ -192,24 +192,27 @@ func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gach
 
 	// gachaIDからガチャマスタの取得
 	gachaInfo, ok := l.GachaMasterByID[gachaID]
+	c.Logger().Printf("[Gacha] GachaInfo[%d] %+v (%d) %v", gachaID, gachaInfo, requestAt, !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt))
 	if !ok || !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt) {
-		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha"))
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha not found gacha %d", gachaID))
 	}
 
 	// gachaItemMasterからアイテムリスト取得
 	gachaItemList, ok := l.GachaItemListByGachaID[gachaID]
 	if !ok {
-		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha itemnot found gacha item %d", gachaID))
 	}
 	if len(gachaItemList) == 0 {
-		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item"))
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha item not found gacha item %d", gachaID))
 	}
 
 	// weightの合計値を算出
 	sum, ok := l.GachaItemWeightSum[gachaID]
 	if !ok {
-		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("not found gacha item sum"))
+		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha weight not found gacha item sumi %d", gachaID))
 	}
+
+	c.Logger().Printf("[Gacha] GachaItemList %v", gachaItemList)
 
 	// random値の導出 & 抽選
 	result := make([]*GachaItemMaster, 0, gachaCount)
@@ -236,6 +239,33 @@ func (l *LocalGachaMasters) ItemsByIDs(ids []int64) []*ItemMaster {
 		res = append(res, l.ItemByID[id])
 	}
 	return res
+}
+
+func (l *LocalGachaMasters) JoinUserCardData(userCardData *TargetUserCardData) error {
+	l.RLock()
+	defer l.RUnlock()
+
+	item, ok := l.ItemByID[userCardData.CardID]
+	if !ok {
+		return fmt.Errorf("missing userCard id = %d", userCardData.CardID)
+	}
+	userCardData.BaseAmountPerSec = *item.AmountPerSec
+	userCardData.MaxLevel = *item.MaxLevel
+	userCardData.MaxAmountPerSec = *item.MaxAmountPerSec
+	userCardData.BaseExpPerLevel = *item.BaseExpPerLevel
+	return nil
+}
+
+func (l *LocalGachaMasters) JoinConsumerUserItemData(c *ConsumeUserItemData) error {
+	l.RLock()
+	defer l.RUnlock()
+
+	item, ok := l.ItemByID[c.ItemID]
+	if !ok {
+		return fmt.Errorf("missing consumerUserItem id = %d", c.ItemID)
+	}
+	c.GainedExp = *item.GainedExp
+	return nil
 }
 
 func (l *LocalGachaMasters) ActiveLoginBonuses(requestAt int64) []*LoginBonusMaster {
