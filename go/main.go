@@ -223,15 +223,9 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Set("requestTime", requestAt.Unix())
 
 		// マスタ確認
-		query := "SELECT * FROM version_masters WHERE status=1"
-		masterVersion := new(VersionMaster)
-		_db := h.DB
-		if err := _db.GetContext(ctx, masterVersion, query); err != nil {
-			if err == sql.ErrNoRows {
-				return errorResponse(c, http.StatusNotFound, fmt.Errorf("active master version is not found"))
-			}
-			return errorResponse(c, http.StatusInternalServerError, err)
-		}
+		masterVersion := localGachaMasters.GetVersionMaster()
+
+		c.Logger().Printf("master: %d / user: %v", masterVersion.MasterVersion, c.Request().Header.Get("x-master-version"))
 
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
 			return errorResponse(c, http.StatusUnprocessableEntity, ErrInvalidMasterVersion)
@@ -419,11 +413,7 @@ func isCompleteTodayLogin(lastActivatedAt, requestAt time.Time) bool {
 // obtainLoginBonus
 func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserLoginBonus, error) {
 	// login bonus masterから有効なログインボーナスを取得
-	loginBonuses := make([]*LoginBonusMaster, 0)
-	query := "SELECT * FROM login_bonus_masters WHERE start_at <= ? AND end_at >= ?"
-	if err := tx.SelectContext(ctx, &loginBonuses, query, requestAt, requestAt); err != nil {
-		return nil, err
-	}
+	loginBonuses := localGachaMasters.ActiveLoginBonuses(requestAt)
 
 	// ユーザーの受け取り履歴 (login_bonus_masters.id -> 受け取り情報) を構築
 	var loginBonusIDs []int64
@@ -451,12 +441,8 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 	sendLoginBonuses := make([]*UserLoginBonus, 0)
 
-	// NOTE: 高々50件もないので全件SELECTしてしまいます
-	var loginBonusRewardMasters []*LoginBonusRewardMaster
-	err = tx.SelectContext(ctx, &loginBonusRewardMasters, "SELECT * FROM login_bonus_reward_masters")
-	if err != nil {
-		return nil, err
-	}
+	loginBonusRewardMasters := localGachaMasters.AllLoginBonusRewards()
+
 	// key: `${login_bonus_id},${reward_sequence}`
 	bonusMapKey := func(bonusID int64, rewardSequence int) string {
 		return fmt.Sprintf("%d,%d", bonusID, rewardSequence)
@@ -534,11 +520,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 
 // obtainPresent プレゼント付与処理
 func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, requestAt int64) ([]*UserPresent, error) {
-	normalPresents := make([]*PresentAllMaster, 0)
-	query := "SELECT * FROM present_all_masters WHERE registered_start_at <= ? AND registered_end_at >= ?"
-	if err := tx.SelectContext(ctx, &normalPresents, query, requestAt, requestAt); err != nil {
-		return nil, err
-	}
+	normalPresents := localGachaMasters.ActivePresentAll(requestAt)
 
 	// ユーザーの受け取り履歴を構築する
 	var normalPresentIDs []int64
@@ -708,16 +690,7 @@ func (obtainer *ItemObtainer) commitCards(ctx context.Context, h *Handler, tx *s
 		return []*UserCard{}, nil
 	}
 
-	query, args, err := sqlx.In("SELECT * FROM item_masters WHERE id IN (?)", obtainer.obtainCards)
-	if err != nil {
-		return nil, err
-	}
-
-	var itemMasters []*ItemMaster
-	err = tx.SelectContext(ctx, &itemMasters, query, args...)
-	if err != nil {
-		return nil, err
-	}
+	itemMasters := localGachaMasters.ItemsByIDs(obtainer.obtainCards)
 
 	var obtainCards []*UserCard
 
@@ -745,7 +718,7 @@ func (obtainer *ItemObtainer) commitCards(ctx context.Context, h *Handler, tx *s
 		obtainCards = append(obtainCards, card)
 	}
 
-	query = "INSERT INTO user_cards" +
+	query := "INSERT INTO user_cards" +
 		"(id, user_id, card_id, amount_per_sec, level, total_exp, created_at, updated_at) VALUES " +
 		"(:id, :user_id, :card_id, :amount_per_sec, :level, :total_exp, :created_at, :updated_at)"
 	if _, err := tx.NamedExecContext(ctx, query, obtainCards); err != nil {
@@ -764,16 +737,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 	for _, item := range obtainer.obtainItems {
 		itemIDs = append(itemIDs, item.itemID)
 	}
-	query, args, err := sqlx.In("SELECT * FROM item_masters WHERE id IN (?)", itemIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	var itemMasters []*ItemMaster
-	err = tx.SelectContext(ctx, &itemMasters, query, args...)
-	if err != nil {
-		return nil, err
-	}
+	itemMasters := localGachaMasters.ItemsByIDs(itemIDs)
 
 	itemIDtoMaster := make(map[int64]*ItemMaster)
 	for _, item := range itemMasters {
@@ -788,7 +752,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 
 	// 持っているアイテムのリストと item_id -> user_item のマッピングを作っておく
 	var havingItems []*UserItem
-	query, args, err = sqlx.In("SELECT * FROM user_items WHERE user_id = ? AND item_id IN (?)", userID, itemIDs)
+	query, args, err := sqlx.In("SELECT * FROM user_items WHERE user_id = ? AND item_id IN (?)", userID, itemIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -886,9 +850,7 @@ func (h *Handler) initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	err = localGachaMasters.Refresh(c, &Handler{
-		DB: dbx,
-	})
+	err = hookRefreshGacha()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -969,14 +931,7 @@ func (h *Handler) createUser(c echo.Context) error {
 	}
 
 	// 初期デッキ付与
-	initCard := new(ItemMaster)
-	query = "SELECT * FROM item_masters WHERE id=?"
-	if err = tx.GetContext(ctx, initCard, query, 2); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrItemNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
+	initCard := localGachaMasters.ItemsByIDs([]int64{2})[0]
 
 	initCards := make([]*UserCard, 0, 3)
 	for i := 0; i < 3; i++ {
