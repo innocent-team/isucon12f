@@ -254,7 +254,6 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 // checkSessionMiddleware
 func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		ctx := c.Request().Context()
 		sessID := c.Request().Header.Get("x-session")
 		if sessID == "" {
 			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
@@ -273,23 +272,23 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		}
 
 		sessionUserID, _ := splitSessionID(sessID)
-		userSession := new(Session)
-		query := "SELECT * FROM user_sessions WHERE session_id=? AND deleted_at IS NULL"
-		_db := h.chooseUserDB(sessionUserID)
-		if err := _db.GetContext(ctx, userSession, query, sessID); err != nil {
-			if err == sql.ErrNoRows {
+
+		realSessID, expiredAt, err := h.getUserSession(c, sessionUserID)
+		if err != nil {
+			if err == ErrMissingSession {
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
-
-		if userSession.UserID != userID {
+		if sessID != realSessID {
+			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
+		}
+		if userID != sessionUserID {
 			return errorResponse(c, http.StatusForbidden, ErrForbidden)
 		}
 
-		if userSession.ExpiredAt < requestAt {
-			query = "UPDATE user_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = _db.ExecContext(ctx, query, requestAt, sessID); err != nil {
+		if expiredAt < requestAt {
+			if err = h.deleteUserSessoin(c, sessionUserID); err != nil {
 				return errorResponse(c, http.StatusInternalServerError, err)
 			}
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
@@ -1014,8 +1013,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 86400,
 	}
-	query = "INSERT INTO user_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.ExecContext(ctx, query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
+	if err = h.newUserSession(c, user.ID, sess.SessionID, sess.ExpiredAt); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -1095,18 +1093,11 @@ func (h *Handler) login(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// sessionを更新
-	query = "UPDATE user_sessions SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = tx.ExecContext(ctx, query, requestAt, req.UserID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	sID, err := h.generateID(ctx)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
 	sessID, err := generateUUID(user.ID)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	sID, err := h.generateID(ctx)
 	sess := &Session{
 		ID:        sID,
 		UserID:    req.UserID,
@@ -1115,8 +1106,7 @@ func (h *Handler) login(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 86400,
 	}
-	query = "INSERT INTO user_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.ExecContext(ctx, query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
+	if err := h.newUserSession(c, req.UserID, sess.SessionID, sess.ExpiredAt); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
