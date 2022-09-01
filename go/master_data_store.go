@@ -274,7 +274,9 @@ func (l *LocalGachaMasters) ActiveLoginBonuses(requestAt int64) []*LoginBonusMas
 
 	res := []*LoginBonusMaster{}
 	for _, bonus := range l.LoginBonuses {
-		if !(bonus.StartAt <= requestAt && requestAt <= bonus.EndAt) {
+		//WORKAROUND: 9月になってログインボーナスが終わってしまった
+		// if !(bonus.StartAt <= requestAt && requestAt <= bonus.EndAt) {
+		if !(bonus.StartAt <= requestAt) {
 			continue
 		}
 		res = append(res, bonus)

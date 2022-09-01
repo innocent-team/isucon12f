@@ -492,6 +492,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		// 今回付与するリソース取得
 		rewardItem, ok := bonusIDandSequenceToBonusReward[bonusMapKey(bonus.ID, userBonus.LastRewardSequence)]
 		if !ok {
+			fmt.Fprintf(os.Stderr, "[Bonus] Missing bonusIDandSequenceToBonusReward %d on %d\n", bonus.ID, userBonus.LastRewardSequence)
 			return nil, ErrLoginBonusRewardNotFound
 
 		}
