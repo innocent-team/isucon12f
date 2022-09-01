@@ -18,7 +18,7 @@ import (
 // admin
 
 func (h *Handler) adminDB(userID int64) *sqlx.DB {
-	return h.UserDBs[userID%3]
+	return h.UserDBs[0] // 決めうち
 }
 
 // adminSessionCheckMiddleware
