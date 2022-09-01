@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/profiler"
+	texporter "github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/trace"
 	"github.com/go-redis/redis/v8"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
@@ -22,6 +25,10 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"github.com/nhatthm/otelsql"
 )
 
 var (
@@ -56,6 +63,44 @@ type Handler struct {
 }
 
 func main() {
+	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
+	// t := time.Now()
+	cfg := profiler.Config{
+		Service: "isuports",
+		// HHmmss-MMDD
+		// XXX: quota突破したのでバージョンを固定する
+		ServiceVersion: "101400-0827",
+		// ProjectID must be set if not running on GCP.
+		ProjectID: projectID,
+
+		// For OpenCensus users:
+		// To see Profiler agent spans in APM backend,
+		// set EnableOCTelemetry to true
+		// EnableOCTelemetry: true,
+	}
+
+	// Profiler initialization, best done as early as possible.
+	if err := profiler.Start(cfg); err != nil {
+		log.Fatal(err)
+	}
+	// Create exporter.
+	ctx := context.Background()
+	exporter, err := texporter.New(texporter.WithProjectID(projectID))
+	if err != nil {
+		log.Fatalf("texporter.NewExporter: %v", err)
+	}
+
+	// Create trace provider with the exporter.
+	//
+	// By default it uses AlwaysSample() which samples all traces.
+	// In a production environment or high QPS setup please use
+	// probabilistic sampling.
+	// Example:
+	//   tp := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.TraceIDRatioBased(0.0001)), ...)
+	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
+	defer tp.ForceFlush(ctx) // flushes any pending spans
+	otel.SetTracerProvider(tp)
+
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
 
@@ -155,14 +200,21 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 		"Asia%2FTokyo",
 		batch,
 	)
-	db, err := sqlx.Open("mysql", dsn)
+
+	driverName, err := otelsql.Register("mysql",
+		otelsql.TraceQueryWithArgs(),
+	)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(2048)
+	db1, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db1.SetMaxOpenConns(2048)
 	// デフォルトは2
-	db.SetMaxIdleConns(1024)
-	return db, nil
+	db1.SetMaxIdleConns(1024)
+	return sqlx.NewDb(db1, "mysql"), nil
 }
 
 // ユーザーIDに応じたuser DBのコネクションを返す
@@ -186,13 +238,20 @@ func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 			"Asia%2FTokyo",
 			batch,
 		)
-		db, err := sqlx.Open("mysql", dsn)
+		driverName, err := otelsql.Register("mysql",
+			otelsql.TraceQueryWithArgs(),
+		)
 		if err != nil {
 			return nil, err
 		}
-		db.SetMaxOpenConns(2048)
+		db1, err := sql.Open(driverName, dsn)
+		if err != nil {
+			return nil, err
+		}
+		db1.SetMaxOpenConns(2048)
 		// デフォルトは2
-		db.SetMaxIdleConns(1024)
+		db1.SetMaxIdleConns(1024)
+		db := sqlx.NewDb(db1, "mysql")
 		conns = append(conns, db)
 	}
 	return conns, nil
@@ -225,8 +284,6 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// マスタ確認
 		masterVersion := localGachaMasters.GetVersionMaster()
 
-		c.Logger().Printf("master: %d / user: %v", masterVersion.MasterVersion, c.Request().Header.Get("x-master-version"))
-
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
 			return errorResponse(c, http.StatusUnprocessableEntity, ErrInvalidMasterVersion)
 		}
@@ -254,7 +311,6 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 // checkSessionMiddleware
 func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		ctx := c.Request().Context()
 		sessID := c.Request().Header.Get("x-session")
 		if sessID == "" {
 			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
@@ -271,23 +327,23 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		}
 
 		sessionUserID, _ := splitSessionID(sessID)
-		userSession := new(Session)
-		query := "SELECT * FROM user_sessions WHERE session_id=? AND deleted_at IS NULL"
-		_db := h.chooseUserDB(sessionUserID)
-		if err := _db.GetContext(ctx, userSession, query, sessID); err != nil {
-			if err == sql.ErrNoRows {
+
+		realSessID, expiredAt, err := h.getUserSession(c, sessionUserID)
+		if err != nil {
+			if err == ErrMissingSession {
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 			}
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
-
-		if userSession.UserID != userID {
+		if sessID != realSessID {
+			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
+		}
+		if userID != sessionUserID {
 			return errorResponse(c, http.StatusForbidden, ErrForbidden)
 		}
 
-		if userSession.ExpiredAt < requestAt {
-			query = "UPDATE user_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = _db.ExecContext(ctx, query, requestAt, sessID); err != nil {
+		if expiredAt < requestAt {
+			if err = h.deleteUserSessoin(c, sessionUserID); err != nil {
 				return errorResponse(c, http.StatusInternalServerError, err)
 			}
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
@@ -490,6 +546,7 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 		// 今回付与するリソース取得
 		rewardItem, ok := bonusIDandSequenceToBonusReward[bonusMapKey(bonus.ID, userBonus.LastRewardSequence)]
 		if !ok {
+			fmt.Fprintf(os.Stderr, "[Bonus] Missing bonusIDandSequenceToBonusReward %d on %d\n", bonus.ID, userBonus.LastRewardSequence)
 			return nil, ErrLoginBonusRewardNotFound
 
 		}
@@ -839,9 +896,18 @@ func (h *Handler) initialize(c echo.Context) error {
 	for _, userDB := range userDBs {
 		defer userDB.Close()
 	}
-	err = h.Redis.FlushAll(ctx).Err()
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
+
+	redisHosts := []string{"isucon1:6379", "isucon5:6379"}
+	for _, host := range redisHosts {
+		r := redis.NewClient(&redis.Options{
+			Addr:     host,
+			Password: "",
+			DB:       0,
+		})
+		err = r.FlushAll(ctx).Err()
+		if err != nil {
+			return errorResponse(c, http.StatusInternalServerError, err)
+		}
 	}
 
 	out, err := exec.Command("/bin/sh", "-c", SQLDirectory+"init.sh").CombinedOutput()
@@ -850,11 +916,12 @@ func (h *Handler) initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	c.Logger().Printf("[Gacha] start hookRefreshGacha on init")
 	err = hookRefreshGacha()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	c.Logger().Printf("[Gacha] local init master")
+	c.Logger().Printf("[Gacha] end hookRefreshGacha on init")
 
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
@@ -1003,8 +1070,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 86400,
 	}
-	query = "INSERT INTO user_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.ExecContext(ctx, query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
+	if err = h.newUserSession(c, user.ID, sess.SessionID, sess.ExpiredAt); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -1055,6 +1121,7 @@ func (h *Handler) login(c echo.Context) error {
 	_db := h.chooseUserDB(req.UserID)
 	if err := _db.GetContext(ctx, user, query, req.UserID); err != nil {
 		if err == sql.ErrNoRows {
+			c.Logger().Errorf("user not found: UserID =lg %v", req.UserID)
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1084,18 +1151,11 @@ func (h *Handler) login(c echo.Context) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	// sessionを更新
-	query = "UPDATE user_sessions SET deleted_at=? WHERE user_id=? AND deleted_at IS NULL"
-	if _, err = tx.ExecContext(ctx, query, requestAt, req.UserID); err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	sID, err := h.generateID(ctx)
-	if err != nil {
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
 	sessID, err := generateUUID(user.ID)
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	sID, err := h.generateID(ctx)
 	sess := &Session{
 		ID:        sID,
 		UserID:    req.UserID,
@@ -1104,8 +1164,7 @@ func (h *Handler) login(c echo.Context) error {
 		UpdatedAt: requestAt,
 		ExpiredAt: requestAt + 86400,
 	}
-	query = "INSERT INTO user_sessions(id, user_id, session_id, created_at, updated_at, expired_at) VALUES (?, ?, ?, ?, ?, ?)"
-	if _, err = tx.ExecContext(ctx, query, sess.ID, sess.UserID, sess.SessionID, sess.CreatedAt, sess.UpdatedAt, sess.ExpiredAt); err != nil {
+	if err := h.newUserSession(c, req.UserID, sess.SessionID, sess.ExpiredAt); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -1314,7 +1373,7 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 	gachaName, result, err := localGachaMasters.Pick(c, h, gachaIDint, gachaCount, requestAt)
 	if err != nil {
-		return err
+		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	tx, err := _db.Beginx()
@@ -1657,9 +1716,8 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	// get target card
 	card := new(TargetUserCardData)
 	query := `
-	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp, im.amount_per_sec as 'base_amount_per_sec', im.max_level , im.max_amount_per_sec , im.base_exp_per_level
+	SELECT uc.id , uc.user_id , uc.card_id , uc.amount_per_sec , uc.level, uc.total_exp
 	FROM user_cards as uc
-	INNER JOIN item_masters as im ON uc.card_id = im.id
 	WHERE uc.id = ? AND uc.user_id=?
 	`
 	_db := h.chooseUserDB(userID)
@@ -1669,6 +1727,10 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	err = localGachaMasters.JoinUserCardData(card)
+	if err != nil {
+		return errorResponse(c, http.StatusNotFound, err)
+	}
 
 	if card.Level == card.MaxLevel {
 		return errorResponse(c, http.StatusBadRequest, fmt.Errorf("target card is max level"))
@@ -1677,11 +1739,11 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	// 消費アイテムの所持チェック
 	items := make([]*ConsumeUserItemData, 0)
 	query = `
-	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at, im.gained_exp
+	SELECT ui.id, ui.user_id, ui.item_id, ui.item_type, ui.amount, ui.created_at, ui.updated_at
 	FROM user_items as ui
-	INNER JOIN item_masters as im ON ui.item_id = im.id
 	WHERE ui.item_type = 3 AND ui.id=? AND ui.user_id=?
 	`
+
 	for _, v := range req.Items {
 		item := new(ConsumeUserItemData)
 		if err = _db.GetContext(ctx, item, query, v.ID, userID); err != nil {
@@ -1693,6 +1755,10 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 
 		if v.Amount > item.Amount {
 			return errorResponse(c, http.StatusBadRequest, fmt.Errorf("item not enough"))
+		}
+		err = localGachaMasters.JoinConsumerUserItemData(item)
+		if err != nil {
+			return errorResponse(c, http.StatusNotFound, err)
 		}
 		item.ConsumeAmount = v.Amount
 		items = append(items, item)

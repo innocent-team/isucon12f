@@ -18,7 +18,7 @@ import (
 // admin
 
 func (h *Handler) adminDB(userID int64) *sqlx.DB {
-	return h.UserDBs[userID%3]
+	return h.UserDBs[0] // 決めうち
 }
 
 // adminSessionCheckMiddleware
@@ -235,6 +235,7 @@ type AdminListMasterResponse struct {
 // adminUpdateMaster マスタデータ更新
 // PUT /admin/master
 func (h *Handler) adminUpdateMaster(c echo.Context) error {
+	c.Logger().Printf("[Gacha] adminUpdateMaster")
 	var activeMaster *VersionMaster
 
 	for _, db := range h.UserDBs {
@@ -506,6 +507,7 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 
+	c.Logger().Debug("[Gacha] Update Master: Success (next hook)")
 	err := hookRefreshGacha()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
