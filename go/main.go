@@ -863,11 +863,12 @@ func (h *Handler) initialize(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	c.Logger().Printf("[Gacha] start hookRefreshGacha on init")
 	err = hookRefreshGacha()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	c.Logger().Printf("[Gacha] local init master")
+	c.Logger().Printf("[Gacha] end hookRefreshGacha on init")
 
 	return successResponse(c, &InitializeResponse{
 		Language: "go",
@@ -1320,7 +1321,6 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
-	c.Logger().Printf("[Gacha] ID%d/%d %s %+v %v", gachaIDint, gachaCount, gachaName, result, err)
 
 	tx, err := _db.Beginx()
 	if err != nil {

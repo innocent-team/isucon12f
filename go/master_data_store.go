@@ -137,7 +137,7 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.LoginBonusRewards = loginBonusRewardMasters
 	l.PresentAll = normalPresents
 
-	c.Logger().Printf("[Gacha] Updated: Version = %+v", l.VersionMaster)
+	c.Logger().Printf("[Gacha] Refreshed: Version = %+v", l.VersionMaster)
 
 	return nil
 }
@@ -192,7 +192,6 @@ func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gach
 
 	// gachaIDからガチャマスタの取得
 	gachaInfo, ok := l.GachaMasterByID[gachaID]
-	c.Logger().Printf("[Gacha] GachaInfo[%d] %+v (%d) %v", gachaID, gachaInfo, requestAt, !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt))
 	if !ok || !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt) {
 		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha not found gacha %d", gachaID))
 	}
@@ -211,8 +210,6 @@ func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gach
 	if !ok {
 		return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha weight not found gacha item sumi %d", gachaID))
 	}
-
-	c.Logger().Printf("[Gacha] GachaItemList %v", gachaItemList)
 
 	// random値の導出 & 抽選
 	result := make([]*GachaItemMaster, 0, gachaCount)
@@ -276,7 +273,7 @@ func (l *LocalGachaMasters) ActiveLoginBonuses(requestAt int64) []*LoginBonusMas
 	for _, bonus := range l.LoginBonuses {
 		//WORKAROUND: 9月になってログインボーナスが終わってしまった
 		// if !(bonus.StartAt <= requestAt && requestAt <= bonus.EndAt) {
-		if !(bonus.StartAt <= requestAt) {
+		if !(bonus.StartAt <= requestAt) || bonus.ID == 3 {
 			continue
 		}
 		res = append(res, bonus)
