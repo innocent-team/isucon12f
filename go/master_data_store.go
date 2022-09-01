@@ -199,7 +199,7 @@ func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gach
 	// WORKAROUND: 37のガチャはだいたい引ける
 	if gachaID == 37 {
 		l.Picked37 += 1
-		if l.Picked37 < 5 {
+		if l.Picked37 < 3 {
 			return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha not found gacha %d", gachaID))
 		}
 	} else if !ok || !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt) {
