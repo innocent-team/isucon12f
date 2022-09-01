@@ -225,8 +225,6 @@ func (h *Handler) apiMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// マスタ確認
 		masterVersion := localGachaMasters.GetVersionMaster()
 
-		c.Logger().Printf("master: %d / user: %v", masterVersion.MasterVersion, c.Request().Header.Get("x-master-version"))
-
 		if masterVersion.MasterVersion != c.Request().Header.Get("x-master-version") {
 			return errorResponse(c, http.StatusUnprocessableEntity, ErrInvalidMasterVersion)
 		}
@@ -258,8 +256,6 @@ func (h *Handler) checkSessionMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		if sessID == "" {
 			return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 		}
-
-		c.Logger().Printf("session: %s", sessID)
 
 		userID, err := getUserID(c)
 		if err != nil {
@@ -457,7 +453,6 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 	for _, bonus := range loginBonuses {
 		// ボーナスの進捗取得
 		userBonus, hasBonusRow := bonusIDtoUserLoginBonus[bonus.ID]
-		fmt.Fprintf(os.Stderr, "[Bonus] %v\n", bonus)
 		if !hasBonusRow {
 			// 初めてログインボーナスを受け取る
 			ubID, err := h.generateID(ctx)
@@ -502,7 +497,6 @@ func (h *Handler) obtainLoginBonus(ctx context.Context, tx *sqlx.Tx, userID int6
 			return nil, err
 		}
 
-		fmt.Fprintf(os.Stderr, "[Bonus] give %v\n", userBonus)
 		sendLoginBonuses = append(sendLoginBonuses, userBonus)
 	}
 
@@ -1068,6 +1062,7 @@ func (h *Handler) login(c echo.Context) error {
 	_db := h.chooseUserDB(req.UserID)
 	if err := _db.GetContext(ctx, user, query, req.UserID); err != nil {
 		if err == sql.ErrNoRows {
+			c.Logger().Errorf("user not found: UserID =lg %v", req.UserID)
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1677,7 +1672,6 @@ func (h *Handler) addExpToCard(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusNotFound, err)
 	}
-	c.Logger().Printf("card: %+v", card)
 
 	if card.Level == card.MaxLevel {
 		return errorResponse(c, http.StatusBadRequest, fmt.Errorf("target card is max level"))
