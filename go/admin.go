@@ -575,9 +575,8 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_cards WHERE user_id=?"
-	cards := make([]*UserCard, 0)
-	if err = db.SelectContext(ctx, &cards, query, userID); err != nil {
+	cards, err := h.getUserCards(c, userID)
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
