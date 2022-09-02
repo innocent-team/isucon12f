@@ -25,6 +25,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -100,12 +101,14 @@ func main() {
 	tp := sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter))
 	defer tp.ForceFlush(ctx) // flushes any pending spans
 	otel.SetTracerProvider(tp)
+	registerOtelsqlDriver()
 
 	rand.Seed(time.Now().UnixNano())
 	time.Local = time.FixedZone("Local", 9*60*60)
 
 	e := echo.New()
 	e.Use(middleware.Recover())
+	e.Use(otelecho.Middleware("isuports"))
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{http.MethodGet, http.MethodPost},
@@ -215,6 +218,20 @@ func connectDB(batch bool) (*sqlx.DB, error) {
 	// デフォルトは2
 	db1.SetMaxIdleConns(1024)
 	return sqlx.NewDb(db1, "mysql"), nil
+}
+
+var dbDriverName string
+
+func registerOtelsqlDriver() error {
+	// https://github.com/nhatthm/otelsql#trace-query
+	driverName, err := otelsql.Register("mysql",
+		otelsql.TraceQueryWithArgs(),
+	)
+	if err != nil {
+		return err
+	}
+	dbDriverName = driverName
+	return nil
 }
 
 // ユーザーIDに応じたuser DBのコネクションを返す
