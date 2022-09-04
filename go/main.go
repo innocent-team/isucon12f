@@ -236,12 +236,12 @@ func registerOtelsqlDriver() error {
 
 // ユーザーIDに応じたuser DBのコネクションを返す
 func (h *Handler) chooseUserDB(userID int64) *sqlx.DB {
-	return h.UserDBs[userID%3]
+	return h.UserDBs[userID%2]
 }
 
 func connectUserDB(batch bool) ([]*sqlx.DB, error) {
 	var conns []*sqlx.DB
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		// ISUCON_DB_HOST1, ISUCON_DB_HOST2, ISUCON_DB_HOST3
 		hostname := fmt.Sprintf("ISUCON_DB_HOST%d", i+1)
 		dsn := fmt.Sprintf(
@@ -900,7 +900,8 @@ func (h *Handler) initialize(c echo.Context) error {
 		defer userDB.Close()
 	}
 
-	redisHosts := []string{"isucon1:6379", "isucon2:6379", "isucon5:6379"}
+	//redisHosts := []string{"isucon1:6379", "isucon2:6379", "isucon5:6379"}
+	redisHosts := []string{"isucon5:6379"}
 	for _, host := range redisHosts {
 		r := redis.NewClient(&redis.Options{
 			Addr:     host,
