@@ -437,12 +437,8 @@ func getRequestTime(c echo.Context) (int64, error) {
 
 // loginProcess ログイン処理
 func (h *Handler) loginProcess(ctx context.Context, tx *sqlx.Tx, userID int64, requestAt int64) (*User, []*UserLoginBonus, []*UserPresent, error) {
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	if err := tx.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil, nil, ErrUserNotFound
-		}
+	user, err := h.getUser(ctx, userID)
+	if err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -458,17 +454,15 @@ func (h *Handler) loginProcess(ctx context.Context, tx *sqlx.Tx, userID int64, r
 		return nil, nil, nil, err
 	}
 
-	if err = tx.GetContext(ctx, &user.IsuCoin, "SELECT isu_coin FROM users WHERE id=?", user.ID); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil, nil, ErrUserNotFound
-		}
+	user.IsuCoin, err = h.getUserIsucoin(ctx, userID)
+	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	user.UpdatedAt = requestAt
 	user.LastActivatedAt = requestAt
 
-	query = "UPDATE users SET updated_at=?, last_activated_at=? WHERE id=?"
+	query := "UPDATE users SET updated_at=?, last_activated_at=? WHERE id=?"
 	if _, err := tx.ExecContext(ctx, query, requestAt, requestAt, userID); err != nil {
 		return nil, nil, nil, err
 	}
@@ -719,7 +713,7 @@ func (obtainer *ItemObtainer) ObtainItem(itemID int64, itemType int, obtainAmoun
 	return nil
 }
 
-func (obtainer *ItemObtainer) commitCoins(ctx context.Context, tx *sqlx.Tx, userID int64) ([]int64, error) {
+func (obtainer *ItemObtainer) commitCoins(ctx context.Context, h *Handler, tx *sqlx.Tx, userID int64) ([]int64, error) {
 	if len(obtainer.obtainCoins) == 0 {
 		return obtainer.obtainCoins, nil
 	}
@@ -729,17 +723,9 @@ func (obtainer *ItemObtainer) commitCoins(ctx context.Context, tx *sqlx.Tx, user
 		obtainAmount += amount
 	}
 
-	query := "UPDATE users SET isu_coin=isu_coin+? WHERE id=?"
-	result, err := tx.ExecContext(ctx, query, obtainAmount, userID)
+	err := h.giveUserIsucoin(ctx, userID, obtainAmount)
 	if err != nil {
 		return nil, err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
-	if affected == 0 {
-		return nil, ErrUserNotFound
 	}
 
 	return obtainer.obtainCoins, nil
@@ -867,7 +853,7 @@ func (obtainer *ItemObtainer) commitItems(ctx context.Context, h *Handler, tx *s
 }
 
 func (obtainer *ItemObtainer) Commit(ctx context.Context, h *Handler, tx *sqlx.Tx, userID, requestAt int64) ([]int64, []*UserCard, []*UserItem, error) {
-	obtainCoins, err := obtainer.commitCoins(ctx, tx, userID)
+	obtainCoins, err := obtainer.commitCoins(ctx, h, tx, userID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -977,8 +963,10 @@ func (h *Handler) createUser(c echo.Context) error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// MEMO: createUserはトランザクションを使わない。キャッシュのため。この後壊れないでほしい。
+	fmt.Printf("[Post User] createUser: %v", user)
 	query := "INSERT INTO users(id, last_activated_at, registered_at, last_getreward_at, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?)"
-	if _, err = tx.ExecContext(ctx, query, user.ID, user.LastActivatedAt, user.RegisteredAt, user.LastGetRewardAt, user.CreatedAt, user.UpdatedAt); err != nil {
+	if _, err = _db.ExecContext(ctx, query, user.ID, user.LastActivatedAt, user.RegisteredAt, user.LastGetRewardAt, user.CreatedAt, user.UpdatedAt); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -1044,6 +1032,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	fmt.Printf("[Post User] to login: %v", user)
 	// ログイン処理
 	user, loginBonuses, presents, err := h.loginProcess(ctx, tx, user.ID, requestAt)
 	if err != nil {
@@ -1055,6 +1044,7 @@ func (h *Handler) createUser(c echo.Context) error {
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
+	fmt.Printf("[Post User] logined: %v", user)
 
 	// generate session
 	sID, err := h.generateID(ctx)
@@ -1119,11 +1109,9 @@ func (h *Handler) login(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	_db := h.chooseUserDB(req.UserID)
-	if err := _db.GetContext(ctx, user, query, req.UserID); err != nil {
-		if err == sql.ErrNoRows {
+	user, err := h.getUser(ctx, req.UserID)
+	if err != nil {
+		if err == ErrUserNotFound {
 			c.Logger().Errorf("user not found: UserID =lg %v", req.UserID)
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
@@ -1147,6 +1135,7 @@ func (h *Handler) login(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	_db := h.chooseUserDB(user.ID)
 	tx, err := _db.Beginx()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1176,7 +1165,7 @@ func (h *Handler) login(c echo.Context) error {
 		user.UpdatedAt = requestAt
 		user.LastActivatedAt = requestAt
 
-		query = "UPDATE users SET updated_at=?, last_activated_at=? WHERE id=?"
+		query := "UPDATE users SET updated_at=?, last_activated_at=? WHERE id=?"
 		if _, err := tx.ExecContext(ctx, query, requestAt, requestAt, req.UserID); err != nil {
 			return errorResponse(c, http.StatusInternalServerError, err)
 		}
@@ -1356,16 +1345,8 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	consumedCoin := int64(gachaCount * 1000)
 
 	// userのisuconが足りるか
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	_db := h.chooseUserDB(userID)
-	if err := _db.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
-			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
-		}
-		return errorResponse(c, http.StatusInternalServerError, err)
-	}
-	if user.IsuCoin < consumedCoin {
+	isucoin, err := h.getUserIsucoin(ctx, userID)
+	if isucoin < consumedCoin {
 		return errorResponse(c, http.StatusConflict, fmt.Errorf("not enough isucon"))
 	}
 
@@ -1379,6 +1360,7 @@ func (h *Handler) drawGacha(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	_db := h.chooseUserDB(userID)
 	tx, err := _db.Beginx()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
@@ -1406,7 +1388,7 @@ func (h *Handler) drawGacha(c echo.Context) error {
 
 		presents = append(presents, present)
 	}
-	query = "INSERT INTO user_presents" +
+	query := "INSERT INTO user_presents" +
 		"(id, user_id, sent_at, item_type, item_id, amount, present_message, created_at, updated_at) VALUES " +
 		"(:id, :user_id, :sent_at, :item_type, :item_id, :amount, :present_message, :created_at, :updated_at)"
 	if _, err := tx.NamedExecContext(ctx, query, presents); err != nil {
@@ -1414,9 +1396,8 @@ func (h *Handler) drawGacha(c echo.Context) error {
 	}
 
 	// isuconをへらす
-	query = "UPDATE users SET isu_coin=? WHERE id=?"
-	totalCoin := user.IsuCoin - consumedCoin
-	if _, err := tx.ExecContext(ctx, query, totalCoin, user.ID); err != nil {
+	err = h.giveUserIsucoin(ctx, userID, -consumedCoin)
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -1625,18 +1606,17 @@ func (h *Handler) listItem(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	_db := h.chooseUserDB(userID)
-	if err = _db.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
+	user, err := h.getUser(ctx, userID)
+	if err != nil {
+		if err == ErrUserNotFound {
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	_db := h.chooseUserDB(userID)
 	itemList := []*UserItem{}
-	query = "SELECT * FROM user_items WHERE user_id = ?"
+	query := "SELECT * FROM user_items WHERE user_id = ?"
 	if err = _db.SelectContext(ctx, &itemList, query, userID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -2024,19 +2004,18 @@ func (h *Handler) reward(c echo.Context) error {
 	}
 
 	// 最後に取得した報酬時刻取得
-	user := new(User)
-	query := "SELECT * FROM users WHERE id=?"
-	_db := h.chooseUserDB(userID)
-	if err = _db.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
+	user, err := h.getUser(ctx, userID)
+	if err != nil {
+		if err == ErrUserNotFound {
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
+	_db := h.chooseUserDB(userID)
 	// 使っているデッキの取得
 	deck := new(UserDeck)
-	query = "SELECT * FROM user_decks WHERE user_id=? AND deleted_at IS NULL"
+	query := "SELECT * FROM user_decks WHERE user_id=? AND deleted_at IS NULL"
 	if err = _db.GetContext(ctx, deck, query, userID); err != nil {
 		if err == sql.ErrNoRows {
 			return errorResponse(c, http.StatusNotFound, err)
@@ -2062,8 +2041,12 @@ func (h *Handler) reward(c echo.Context) error {
 	user.IsuCoin += int64(getCoin)
 	user.LastGetRewardAt = requestAt
 
-	query = "UPDATE users SET isu_coin=?, last_getreward_at=? WHERE id=?"
-	if _, err = _db.ExecContext(ctx, query, user.IsuCoin, user.LastGetRewardAt, user.ID); err != nil {
+	query = "UPDATE users SET last_getreward_at=? WHERE id=?"
+	if _, err = _db.ExecContext(ctx, query, user.LastGetRewardAt, user.ID); err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	err = h.giveUserIsucoin(ctx, user.ID, int64(getCoin))
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -2124,10 +2107,9 @@ func (h *Handler) home(c echo.Context) error {
 	}
 
 	// 経過時間
-	user := new(User)
-	query = "SELECT * FROM users WHERE id=?"
-	if err = _db.GetContext(ctx, user, query, userID); err != nil {
-		if err == sql.ErrNoRows {
+	user, err := h.getUser(ctx, userID)
+	if err != nil {
+		if err == ErrUserNotFound {
 			return errorResponse(c, http.StatusNotFound, ErrUserNotFound)
 		}
 		return errorResponse(c, http.StatusInternalServerError, err)
