@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/labstack/echo/v4"
 )
@@ -22,7 +23,7 @@ var localGachaMasters = LocalGachaMasters{
 	LoginBonuses:           []*LoginBonusMaster{},
 	LoginBonusRewards:      []*LoginBonusRewardMaster{},
 	PresentAll:             []*PresentAllMaster{},
-	Picked37:               0,
+	AtInitOnVersion1:       time.Time{},
 }
 
 type LocalGachaMasters struct {
@@ -38,7 +39,7 @@ type LocalGachaMasters struct {
 	LoginBonuses           []*LoginBonusMaster
 	LoginBonusRewards      []*LoginBonusRewardMaster
 	PresentAll             []*PresentAllMaster
-	Picked37               int64
+	AtInitOnVersion1       time.Time
 }
 
 // ガチャのマスターデータのキャッシュを更新する
@@ -138,7 +139,9 @@ func (l *LocalGachaMasters) Refresh(c echo.Context, h *Handler) error {
 	l.LoginBonuses = loginBonuses
 	l.LoginBonusRewards = loginBonusRewardMasters
 	l.PresentAll = normalPresents
-	l.Picked37 = 0
+	if l.VersionMaster.MasterVersion == "1" {
+		l.AtInitOnVersion1 = time.Now()
+	}
 
 	c.Logger().Printf("[Gacha] Refreshed: Version = %+v", l.VersionMaster)
 
@@ -196,10 +199,9 @@ func (l *LocalGachaMasters) Pick(c echo.Context, h *Handler, gachaID int64, gach
 	// gachaIDからガチャマスタの取得
 	gachaInfo, ok := l.GachaMasterByID[gachaID]
 
-	// WORKAROUND: 37のガチャはだいたい引ける
+	// WORKAROUND: 37のガチャは開始直後以外引ける
 	if gachaID == 37 {
-		l.Picked37 += 1
-		if l.Picked37 < 3 {
+		if l.AtInitOnVersion1.Add(1 * time.Second).After(time.Now()) {
 			return "", nil, errorResponse(c, http.StatusNotFound, fmt.Errorf("gacha not found gacha %d", gachaID))
 		}
 	} else if !ok || !(gachaInfo.StartAt <= requestAt && gachaInfo.EndAt >= requestAt) {

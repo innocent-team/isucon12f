@@ -68,7 +68,6 @@ func (h *Handler) getUserCards(ctx echo.Context, userID int64) ([]*UserCard, err
 		}
 		res = append(res, c)
 	}
-	ctx.Logger().Printf("getUserCards: %v %v", userID, res)
 	return res, nil
 }
 

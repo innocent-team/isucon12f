@@ -601,20 +601,12 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 	for _, np := range normalPresents {
 		normalPresentIDs = append(normalPresentIDs, np.ID)
 	}
-	query, args, err := sqlx.In(
-		"SELECT * FROM user_present_all_received_history WHERE user_id=? AND present_all_id IN (?)",
-		userID,
-		normalPresentIDs,
-	)
-	// TODO: normalPresentIDsが長さ0のときのハンドリング
+
+	userReceivedHistories, err := h.getUserPresentHistory(ctx, userID, normalPresentIDs)
 	if err != nil {
 		return nil, err
 	}
-	var userReceivedHistories []UserPresentAllReceivedHistory
-	err = tx.SelectContext(ctx, &userReceivedHistories, query, args...)
-	if err != nil {
-		return nil, err
-	}
+
 	isReceivedPresent := make(map[int64]bool)
 	for _, history := range userReceivedHistories {
 		isReceivedPresent[history.PresentAllID] = true
@@ -681,14 +673,8 @@ func (h *Handler) obtainPresent(ctx context.Context, tx *sqlx.Tx, userID int64, 
 		return nil, err
 	}
 
-	// historyにbulk insert
-	if _, err := tx.NamedExecContext(
-		ctx,
-		"INSERT INTO user_present_all_received_history"+
-			"(id, user_id, present_all_id, received_at, created_at, updated_at) VALUES "+
-			"(:id, :user_id, :present_all_id, :received_at, :created_at, :updated_at)",
-		receivedPresentHistories,
-	); err != nil {
+	err = h.setUserPresentHistories(ctx, userID, receivedPresentHistories)
+	if err != nil {
 		return nil, err
 	}
 

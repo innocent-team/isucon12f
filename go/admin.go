@@ -604,9 +604,8 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_present_all_received_history WHERE user_id=?"
-	presentHistory := make([]*UserPresentAllReceivedHistory, 0)
-	if err = db.SelectContext(ctx, &presentHistory, query, userID); err != nil {
+	presentHistory, err := h.getAllUserPresentHistory(ctx, userID)
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
