@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"io"
+	"math/rand"
 	"net/http"
 	"strings"
 
@@ -16,9 +17,8 @@ import (
 // //////////////////////////////////////
 // admin
 
-func (h *Handler) adminDB() *sqlx.DB {
-	// 1番目に決め打ち
-	return h.UserDBs[0]
+func (h *Handler) adminDB(userID int64) *sqlx.DB {
+	return h.UserDBs[0] // 決めうち
 }
 
 // adminSessionCheckMiddleware
@@ -27,9 +27,11 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 		ctx := c.Request().Context()
 		sessID := c.Request().Header.Get("x-session")
 
+		userID, _ := splitSessionID(sessID)
+		_db := h.adminDB(userID)
 		adminSession := new(Session)
 		query := "SELECT * FROM admin_sessions WHERE session_id=? AND deleted_at IS NULL"
-		if err := h.adminDB().GetContext(ctx, adminSession, query, sessID); err != nil {
+		if err := _db.GetContext(ctx, adminSession, query, sessID); err != nil {
 			if err == sql.ErrNoRows {
 				return errorResponse(c, http.StatusUnauthorized, ErrUnauthorized)
 			}
@@ -43,7 +45,7 @@ func (h *Handler) adminSessionCheckMiddleware(next echo.HandlerFunc) echo.Handle
 
 		if adminSession.ExpiredAt < requestAt {
 			query = "UPDATE admin_sessions SET deleted_at=? WHERE session_id=?"
-			if _, err = h.adminDB().ExecContext(ctx, query, requestAt, sessID); err != nil {
+			if _, err = _db.ExecContext(ctx, query, requestAt, sessID); err != nil {
 				return errorResponse(c, http.StatusInternalServerError, err)
 			}
 			return errorResponse(c, http.StatusUnauthorized, ErrExpiredSession)
@@ -73,7 +75,7 @@ func (h *Handler) adminLogin(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
 
-	tx, err := h.adminDB().Beginx()
+	tx, err := h.adminDB(req.UserID).Beginx()
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
@@ -157,9 +159,10 @@ func (h *Handler) adminLogout(c echo.Context) error {
 	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, ErrGetRequestTime)
 	}
+	userID, _ := splitSessionID(sessID)
 	// すでにあるsessionをdeleteにする
 	query := "UPDATE admin_sessions SET deleted_at=? WHERE session_id=? AND deleted_at IS NULL"
-	if _, err = h.adminDB().ExecContext(ctx, query, requestAt, sessID); err != nil {
+	if _, err = h.adminDB(userID).ExecContext(ctx, query, requestAt, sessID); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -171,39 +174,40 @@ func (h *Handler) adminLogout(c echo.Context) error {
 func (h *Handler) adminListMaster(c echo.Context) error {
 	ctx := c.Request().Context()
 	masterVersions := make([]*VersionMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &masterVersions, "SELECT * FROM version_masters"); err != nil {
+	_db := h.adminDB(rand.Int63())
+	if err := _db.SelectContext(ctx, &masterVersions, "SELECT * FROM version_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	items := make([]*ItemMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &items, "SELECT * FROM item_masters"); err != nil {
+	if err := _db.SelectContext(ctx, &items, "SELECT * FROM item_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	gachas := make([]*GachaMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &gachas, "SELECT * FROM gacha_masters"); err != nil {
+	if err := _db.SelectContext(ctx, &gachas, "SELECT * FROM gacha_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	gachaItems := make([]*GachaItemMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
+	if err := _db.SelectContext(ctx, &gachaItems, "SELECT * FROM gacha_item_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
 	presentAlls := make([]*PresentAllMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &presentAlls, "SELECT * FROM present_all_masters"); err != nil {
+	if err := _db.SelectContext(ctx, &presentAlls, "SELECT * FROM present_all_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 
 	}
 
 	loginBonuses := make([]*LoginBonusMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
+	if err := _db.SelectContext(ctx, &loginBonuses, "SELECT * FROM login_bonus_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 
 	}
 
 	loginBonusRewards := make([]*LoginBonusRewardMaster, 0)
-	if err := h.adminDB().SelectContext(ctx, &loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
+	if err := _db.SelectContext(ctx, &loginBonusRewards, "SELECT * FROM login_bonus_reward_masters"); err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -231,6 +235,7 @@ type AdminListMasterResponse struct {
 // adminUpdateMaster マスタデータ更新
 // PUT /admin/master
 func (h *Handler) adminUpdateMaster(c echo.Context) error {
+	c.Logger().Printf("[Gacha] adminUpdateMaster")
 	var activeMaster *VersionMaster
 
 	for _, db := range h.UserDBs {
@@ -502,6 +507,13 @@ func (h *Handler) adminUpdateMaster(c echo.Context) error {
 		}
 	}
 
+	c.Logger().Debug("[Gacha] Update Master: Success (next hook)")
+	err := hookRefreshGacha()
+	if err != nil {
+		return errorResponse(c, http.StatusInternalServerError, err)
+	}
+	c.Logger().Printf("[Gacha] hooked Refresh Gacha")
+
 	return successResponse(c, &AdminUpdateMasterResponse{
 		VersionMaster: activeMaster,
 	})
@@ -563,9 +575,8 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_cards WHERE user_id=?"
-	cards := make([]*UserCard, 0)
-	if err = db.SelectContext(ctx, &cards, query, userID); err != nil {
+	cards, err := h.getUserCards(c, userID)
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
@@ -593,9 +604,8 @@ func (h *Handler) adminUser(c echo.Context) error {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
-	query = "SELECT * FROM user_present_all_received_history WHERE user_id=?"
-	presentHistory := make([]*UserPresentAllReceivedHistory, 0)
-	if err = db.SelectContext(ctx, &presentHistory, query, userID); err != nil {
+	presentHistory, err := h.getAllUserPresentHistory(ctx, userID)
+	if err != nil {
 		return errorResponse(c, http.StatusInternalServerError, err)
 	}
 
