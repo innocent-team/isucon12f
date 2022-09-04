@@ -42,7 +42,7 @@ if [[ "$INSTANCE_NUM" != 1 ]]; then
 fi
 
 # APP
-if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
+if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 5 ]]; then
   pushd go
   /home/isucon/local/golang/bin/go build -o isuconquest
   popd
@@ -54,12 +54,12 @@ if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
   sudo systemctl status isuconquest.go.service --no-pager
 fi
 
-if [[ "$INSTANCE_NUM" != 1 && "$INSTANCE_NUM" != 5 ]]; then
+if [[ "$INSTANCE_NUM" != 1 && "$INSTANCE_NUM" != 2 && "$INSTANCE_NUM" != 5 ]]; then
   sudo systemctl disable --now isuconquest.go.service
 fi
 
 # MYSQL
-if [[ "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 3 || "$INSTANCE_NUM" == 4 ]]; then
+if [[ "$INSTANCE_NUM" == 3 || "$INSTANCE_NUM" == 4 ]]; then
   sudo install -o root -g root -m 644 ./conf/etc/mysql/mysql.conf.d/mysqld.cnf /etc/mysql/mysql.conf.d/mysqld.cnf
 
   echo "MySQL restart したいなら手動でやってね"
@@ -68,12 +68,12 @@ if [[ "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 3 || "$INSTANCE_NUM" == 4 ]]; t
 fi
 
 # Redis
-if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
+if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 5 ]]; then
   sudo install -o root -g root -m 644 ./conf/etc/redis/redis.conf /etc/redis/redis.conf
   sudo systemctl restart redis
   sudo systemctl enable --now redis-server
 fi
 
-if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 5 ]]; then
+if [[ "$INSTANCE_NUM" == 1 || "$INSTANCE_NUM" == 2 || "$INSTANCE_NUM" == 5 ]]; then
   sudo systemctl disable --now mysql.service
 fi

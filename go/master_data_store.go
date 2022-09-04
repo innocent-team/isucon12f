@@ -336,7 +336,15 @@ func hookRefreshGacha() error {
 		return fmt.Errorf("isucon5 refresh error: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("isucon1 refresh error: %s", resp.Status)
+		return fmt.Errorf("isucon5 refresh error: %s", resp.Status)
+	}
+	defer resp.Body.Close()
+	resp, err = http.Post("http://isucon5:8080/gacha/refresh", "application/x-www-form-urlencoded", nil)
+	if err != nil {
+		return fmt.Errorf("isucon5 refresh error: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("isucon5 refresh error: %s", resp.Status)
 	}
 	defer resp.Body.Close()
 	return nil

@@ -900,7 +900,7 @@ func (h *Handler) initialize(c echo.Context) error {
 		defer userDB.Close()
 	}
 
-	redisHosts := []string{"isucon1:6379", "isucon5:6379"}
+	redisHosts := []string{"isucon1:6379", "isucon2:6379", "isucon5:6379"}
 	for _, host := range redisHosts {
 		r := redis.NewClient(&redis.Options{
 			Addr:     host,
